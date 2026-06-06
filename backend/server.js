@@ -371,6 +371,43 @@ async function handleRegisterRequest(req, res) {
     sentAt: null,
     emailError: null,
   });
+  // If the user is requesting an OTP for the same address used for SMTP
+  // (common during testing) send synchronously and return delivery info so
+  // the requester can see a preview or messageId immediately. Otherwise
+  // send in background for speed.
+  try {
+    const smtpCfg = (() => {
+      try {
+        return getSmtpConfig();
+      } catch {
+        return null;
+      }
+    })();
+
+    const smtpUser = smtpCfg && smtpCfg.user ? normalizeEmail(smtpCfg.user) : "";
+    const smtpFrom = smtpCfg && smtpCfg.from ? normalizeEmail(smtpCfg.from) : "";
+
+    if (smtpUser && (smtpUser === email || smtpFrom === email)) {
+      // synchronous send for immediate feedback during testing
+      try {
+        const info = await sendOtpEmail(email, otp);
+        const rec = pendingOtps.get(email);
+        if (rec) {
+          rec.emailSent = true;
+          rec.sentAt = Date.now();
+          rec.emailInfo = info && info.messageId ? { messageId: info.messageId } : null;
+          rec.emailPreview = nodemailer.getTestMessageUrl(info) || null;
+        }
+        return sendJson(res, 200, { ok: true, email, sent: true, emailInfo: rec.emailInfo, preview: rec.emailPreview });
+      } catch (err) {
+        const rec = pendingOtps.get(email);
+        if (rec) rec.emailError = err && err.message ? err.message : String(err);
+        return sendJson(res, 502, { error: "Failed to send verification email (test mode).", detail: rec.emailError });
+      }
+    }
+  } catch (e) {
+    // ignore smtp detection errors and fall back to background send
+  }
 
   // Send the email asynchronously; don't block the request on SMTP latency.
   (async () => {
