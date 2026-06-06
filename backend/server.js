@@ -8,6 +8,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 const { Server } = require("socket.io");
+const { MongoClient } = require("mongodb");
 
 const PORT = process.env.PORT || 3000;
 const FRONTEND_DIR = path.resolve(__dirname, "..", "frontend");
@@ -26,6 +27,45 @@ const pendingOtps = new Map();
 const verifiedRegistrations = new Map();
 const activeUsers = new Map();
 const messages = [];
+
+// MongoDB: optional persistence for users so credentials survive restarts
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017";
+const MONGODB_DB = process.env.MONGODB_DB || "chatbot";
+let db = null;
+let usersCollection = null;
+
+async function initDb() {
+  try {
+    const client = new MongoClient(MONGODB_URI, { serverApi: { version: "1" } });
+    await client.connect();
+    db = client.db(MONGODB_DB);
+    usersCollection = db.collection("users");
+
+    const all = await usersCollection.find({}).toArray();
+    for (const u of all) {
+      users.set(u.email, {
+        email: u.email,
+        displayName: u.displayName,
+        passwordHash: u.passwordHash,
+        passwordSalt: u.passwordSalt,
+        joinedAt: u.joinedAt || Date.now(),
+        lastSeen: u.lastSeen || Date.now(),
+      });
+    }
+    console.log(`Loaded ${all.length} users from MongoDB`);
+  } catch (err) {
+    console.warn("Could not connect to MongoDB, falling back to in-memory store:", err.message || err);
+  }
+}
+
+async function saveUserToDb(user) {
+  if (!usersCollection || !user || !user.email) return;
+  try {
+    await usersCollection.updateOne({ email: user.email }, { $set: user }, { upsert: true });
+  } catch (err) {
+    console.warn("Failed to save user to MongoDB:", err && err.message ? err.message : err);
+  }
+}
 
 function sendJson(res, status, data) {
   const body = JSON.stringify(data);
@@ -143,8 +183,9 @@ function getSession(req) {
   const email = normalizeEmail(payload.sub || payload.email);
   const user = users.get(email);
   if (!user) return null;
-
   user.lastSeen = Date.now();
+  // persist lastSeen asynchronously
+  saveUserToDb(user).catch(() => {});
   return { email, user };
 }
 
@@ -375,6 +416,8 @@ async function handleCompleteRegistration(req, res) {
     joinedAt: Date.now(),
     lastSeen: Date.now(),
   });
+  // persist new user
+  saveUserToDb(users.get(verified.email)).catch(() => {});
   verifiedRegistrations.delete(verificationToken);
 
   return sendJson(res, 201, { ok: true, email: verified.email });
@@ -391,6 +434,8 @@ async function handleLogin(req, res) {
   }
 
   user.lastSeen = Date.now();
+  // persist updated lastSeen
+  saveUserToDb(user).catch(() => {});
   return sendJson(res, 200, {
     token: createJwt(user),
     email: user.email,
@@ -532,6 +577,7 @@ io.on("connection", (socket) => {
   const user = socket.user;
   activeUsers.set(user.email, (activeUsers.get(user.email) || 0) + 1);
   user.lastSeen = Date.now();
+  saveUserToDb(user).catch(() => {});
   socket.join(`user:${user.email}`);
   broadcastUsersUpdate();
 
@@ -557,6 +603,7 @@ io.on("connection", (socket) => {
     if (count <= 1) {
       activeUsers.delete(user.email);
       user.lastSeen = Date.now();
+      saveUserToDb(user).catch(() => {});
     } else {
       activeUsers.set(user.email, count - 1);
     }
@@ -564,6 +611,10 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Chat app running at http://localhost:${PORT}`);
-});
+initDb()
+  .catch(() => {})
+  .finally(() => {
+    server.listen(PORT, () => {
+      console.log(`Chat app running at http://localhost:${PORT}`);
+    });
+  });
