@@ -220,6 +220,10 @@ async function sendOtpEmail(email, otp) {
         user: smtp.user,
         pass: smtp.pass,
       },
+      connectionTimeout: 5000,
+      greetingTimeout: 5000,
+      socketTimeout: 10000,
+      tls: { rejectUnauthorized: false },
     });
     mailFrom = smtp.from;
   } catch (err) {
@@ -237,11 +241,15 @@ async function sendOtpEmail(email, otp) {
         user: testAccount.user,
         pass: testAccount.pass,
       },
+      connectionTimeout: 5000,
+      greetingTimeout: 5000,
+      socketTimeout: 10000,
     });
     mailFrom = testAccount.user;
   }
 
-  const info = await transporter.sendMail({
+  // send with a small retry loop to handle transient SMTP failures
+  const mailOptions = {
     from: mailFrom,
     to: email,
     subject: "Your chat verification code",
@@ -254,18 +262,42 @@ async function sendOtpEmail(email, otp) {
         <p>This code expires in 10 minutes.</p>
       </div>
     `,
-  });
-  // Log helpful info: preview URL (Ethereal) or messageId for real SMTP.
-  try {
-    const preview = nodemailer.getTestMessageUrl(info);
-    if (preview) {
-      console.log("Ethereal preview URL:", preview);
-    } else if (info && info.messageId) {
-      console.log("Email sent, messageId:", info.messageId);
+  };
+
+    // transporter verification and send with retries
+    try {
+      await transporter.verify();
+    } catch (err) {
+      console.warn("SMTP verification failed:", err && err.message ? err.message : err);
     }
-  } catch (e) {
-    // ignore logging errors
-  }
+
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`Sending OTP email to ${email} (attempt ${attempt})`);
+        const info = await transporter.sendMail(mailOptions);
+        try {
+          const preview = nodemailer.getTestMessageUrl(info);
+          if (preview) {
+            console.log("Ethereal preview URL:", preview);
+          } else if (info && info.messageId) {
+            console.log("Email sent, messageId:", info.messageId);
+          }
+        } catch (e) {
+          // ignore logging errors
+        }
+        return info;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`Failed to send OTP email to ${email} (attempt ${attempt}):`,
+          err && err.message ? err.message : err);
+        // small backoff
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
+
+    // if we reach here, all attempts failed
+    throw lastErr || new Error("Failed to send email");
 }
 
 function getPublicUser(user) {
@@ -335,12 +367,29 @@ async function handleRegisterRequest(req, res) {
     otpSalt,
     attempts: 0,
     expiresAt: Date.now() + OTP_TTL_MS,
+    emailSent: false,
+    sentAt: null,
+    emailError: null,
   });
 
   // Send the email asynchronously; don't block the request on SMTP latency.
-  sendOtpEmail(email, otp).catch((err) => {
-    console.error("Failed to send OTP email (background):", err && err.message ? err.message : err);
-  });
+  (async () => {
+    try {
+      const info = await sendOtpEmail(email, otp);
+      const rec = pendingOtps.get(email);
+      if (rec) {
+        rec.emailSent = true;
+        rec.sentAt = Date.now();
+        rec.emailInfo = info && info.messageId ? { messageId: info.messageId } : null;
+      }
+    } catch (err) {
+      const rec = pendingOtps.get(email);
+      if (rec) {
+        rec.emailError = err && err.message ? err.message : String(err);
+      }
+      console.error("Failed to send OTP email (background):", err && err.message ? err.message : err);
+    }
+  })();
 
   return sendJson(res, 200, { ok: true, email });
 }
