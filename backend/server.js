@@ -1,0 +1,569 @@
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
+
+const jwt = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
+const { Server } = require("socket.io");
+
+const PORT = process.env.PORT || 3000;
+const FRONTEND_DIR = path.resolve(__dirname, "..", "frontend");
+const JWT_SECRET = process.env.JWT_SECRET || "local-development-secret-change-this";
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
+const OTP_TTL_MS = 10 * 60 * 1000;
+const VERIFIED_TTL_MS = 10 * 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
+
+if (!process.env.JWT_SECRET) {
+  console.warn("JWT_SECRET is not set. Add a strong JWT_SECRET in .env before production use.");
+}
+
+const users = new Map();
+const pendingOtps = new Map();
+const verifiedRegistrations = new Map();
+const activeUsers = new Map();
+const messages = [];
+
+function sendJson(res, status, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 1_000_000) {
+        req.destroy();
+        reject(new Error("Request body too large"));
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch {
+        reject(new Error("Invalid JSON"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
+}
+
+function getDisplayName(email) {
+  const localPart = email.split("@")[0] || "User";
+  return localPart.replace(/[._-]+/g, " ").trim().slice(0, 32) || "User";
+}
+
+function hashSecret(secret, salt) {
+  return crypto.scryptSync(secret, salt, 64).toString("hex");
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  return { salt, hash: hashSecret(password, salt) };
+}
+
+function safeEqualHex(left, right) {
+  const leftBuffer = Buffer.from(left, "hex");
+  const rightBuffer = Buffer.from(right, "hex");
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function verifyPassword(password, user) {
+  return safeEqualHex(hashSecret(password, user.passwordSalt), user.passwordHash);
+}
+
+function generateOtp() {
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+function hashOtp(email, otp, salt) {
+  return crypto.createHash("sha256").update(`${email}:${otp}:${salt}`).digest("hex");
+}
+
+function conversationKey(a, b) {
+  return [a, b].sort((left, right) => left.localeCompare(right)).join("::");
+}
+
+function requirePassword(password) {
+  const value = String(password || "");
+  if (value.length < 8) return "Password must be at least 8 characters.";
+  if (value.length > 128) return "Password must be 128 characters or fewer.";
+  return "";
+}
+
+function createJwt(user) {
+  return jwt.sign(
+    {
+      email: user.email,
+      displayName: user.displayName,
+    },
+    JWT_SECRET,
+    {
+      expiresIn: JWT_EXPIRES_IN,
+      issuer: "one-to-one-chat",
+      subject: user.email,
+    }
+  );
+}
+
+function verifyJwtToken(token) {
+  try {
+    return jwt.verify(token, JWT_SECRET, { issuer: "one-to-one-chat" });
+  } catch {
+    return null;
+  }
+}
+
+function getBearerToken(req) {
+  const header = req.headers.authorization || "";
+  return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
+
+function getSession(req) {
+  const payload = verifyJwtToken(getBearerToken(req));
+  if (!payload) return null;
+
+  const email = normalizeEmail(payload.sub || payload.email);
+  const user = users.get(email);
+  if (!user) return null;
+
+  user.lastSeen = Date.now();
+  return { email, user };
+}
+
+function getSmtpConfig() {
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM || user;
+  const secure = process.env.SMTP_SECURE === "true" || port === 465;
+
+  if (!host || !user || !pass || !from) {
+    throw new Error(
+      "Email service is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM in .env."
+    );
+  }
+
+  return { host, port, user, pass, from, secure };
+}
+
+async function sendOtpEmail(email, otp) {
+  let transporter;
+  let mailFrom;
+
+  try {
+    const smtp = getSmtpConfig();
+    transporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.secure,
+      auth: {
+        user: smtp.user,
+        pass: smtp.pass,
+      },
+    });
+    mailFrom = smtp.from;
+  } catch (err) {
+    // If running in production, surface the error — don't silently fall back.
+    if (process.env.NODE_ENV === "production") throw err;
+
+    // Fallback to Ethereal test account for local development/testing
+    console.warn("SMTP not configured; using Ethereal test account for email preview.", err.message || err);
+    const testAccount = await nodemailer.createTestAccount();
+    transporter = nodemailer.createTransport({
+      host: "smtp.ethereal.email",
+      port: 587,
+      secure: false,
+      auth: {
+        user: testAccount.user,
+        pass: testAccount.pass,
+      },
+    });
+    mailFrom = testAccount.user;
+  }
+
+  const info = await transporter.sendMail({
+    from: mailFrom,
+    to: email,
+    subject: "Your chat verification code",
+    text: `Your verification code is ${otp}. It expires in 10 minutes.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;line-height:1.5;color:#172033">
+        <h2>Your verification code</h2>
+        <p>Use this code to create your chat account:</p>
+        <p style="font-size:28px;font-weight:700;letter-spacing:4px">${otp}</p>
+        <p>This code expires in 10 minutes.</p>
+      </div>
+    `,
+  });
+  // Log helpful info: preview URL (Ethereal) or messageId for real SMTP.
+  try {
+    const preview = nodemailer.getTestMessageUrl(info);
+    if (preview) {
+      console.log("Ethereal preview URL:", preview);
+    } else if (info && info.messageId) {
+      console.log("Email sent, messageId:", info.messageId);
+    }
+  } catch (e) {
+    // ignore logging errors
+  }
+}
+
+function getPublicUser(user) {
+  return {
+    email: user.email,
+    displayName: user.displayName,
+    online: activeUsers.has(user.email),
+    lastSeen: user.lastSeen,
+  };
+}
+
+function getUsersFor(email) {
+  return [...users.values()]
+    .filter((user) => user.email !== email)
+    .map(getPublicUser)
+    .sort((a, b) => Number(b.online) - Number(a.online) || b.lastSeen - a.lastSeen);
+}
+
+function createMessage({ sender, toEmail, text }) {
+  const recipient = users.get(toEmail);
+  const cleanText = String(text || "").trim().slice(0, 1000);
+
+  if (!recipient) {
+    throw new Error("Choose a user to chat with.");
+  }
+
+  if (recipient.email === sender.email) {
+    throw new Error("Pick another user.");
+  }
+
+  if (!cleanText) {
+    throw new Error("Type a message first.");
+  }
+
+  const message = {
+    id: Date.now() * 1000 + Math.floor(Math.random() * 1000),
+    chat: conversationKey(sender.email, recipient.email),
+    fromEmail: sender.email,
+    fromName: sender.displayName,
+    toEmail: recipient.email,
+    toName: recipient.displayName,
+    text: cleanText,
+    createdAt: Date.now(),
+  };
+
+  messages.push(message);
+  return message;
+}
+
+async function handleRegisterRequest(req, res) {
+  const body = await readBody(req);
+  const email = normalizeEmail(body.email);
+
+  if (!isValidEmail(email)) {
+    return sendJson(res, 400, { error: "Enter a valid email address." });
+  }
+
+  if (users.has(email)) {
+    return sendJson(res, 409, { error: "An account already exists for this email." });
+  }
+
+  const otp = generateOtp();
+  const otpSalt = crypto.randomBytes(16).toString("hex");
+
+  try {
+    await sendOtpEmail(email, otp);
+  } catch (err) {
+    console.error("Failed to send OTP email:", err && err.message ? err.message : err);
+    return sendJson(res, 502, {
+      error:
+        "Failed to send verification email. Check SMTP configuration (see .env.example) or server logs.",
+    });
+  }
+
+  pendingOtps.set(email, {
+    otpHash: hashOtp(email, otp, otpSalt),
+    otpSalt,
+    attempts: 0,
+    expiresAt: Date.now() + OTP_TTL_MS,
+  });
+
+  return sendJson(res, 200, { ok: true, email });
+}
+
+async function handleVerifyOtp(req, res) {
+  const body = await readBody(req);
+  const email = normalizeEmail(body.email);
+  const otp = String(body.otp || "").trim();
+  const pending = pendingOtps.get(email);
+
+  if (!pending) {
+    return sendJson(res, 400, { error: "Request a new verification code." });
+  }
+
+  if (Date.now() > pending.expiresAt) {
+    pendingOtps.delete(email);
+    return sendJson(res, 400, { error: "Verification code expired. Request a new one." });
+  }
+
+  if (pending.attempts >= MAX_OTP_ATTEMPTS) {
+    pendingOtps.delete(email);
+    return sendJson(res, 429, { error: "Too many wrong codes. Request a new one." });
+  }
+
+  const otpHash = hashOtp(email, otp, pending.otpSalt);
+  if (!safeEqualHex(otpHash, pending.otpHash)) {
+    pending.attempts += 1;
+    return sendJson(res, 400, { error: "Incorrect verification code." });
+  }
+
+  pendingOtps.delete(email);
+  const verificationToken = crypto.randomBytes(24).toString("hex");
+  verifiedRegistrations.set(verificationToken, {
+    email,
+    expiresAt: Date.now() + VERIFIED_TTL_MS,
+  });
+
+  return sendJson(res, 200, { verificationToken });
+}
+
+async function handleCompleteRegistration(req, res) {
+  const body = await readBody(req);
+  const verificationToken = String(body.verificationToken || "");
+  const password = String(body.password || "");
+  const verified = verifiedRegistrations.get(verificationToken);
+
+  if (!verified || Date.now() > verified.expiresAt) {
+    verifiedRegistrations.delete(verificationToken);
+    return sendJson(res, 400, { error: "Verification expired. Start again." });
+  }
+
+  const passwordError = requirePassword(password);
+  if (passwordError) {
+    return sendJson(res, 400, { error: passwordError });
+  }
+
+  if (users.has(verified.email)) {
+    verifiedRegistrations.delete(verificationToken);
+    return sendJson(res, 409, { error: "An account already exists for this email." });
+  }
+
+  const passwordData = hashPassword(password);
+  users.set(verified.email, {
+    email: verified.email,
+    displayName: getDisplayName(verified.email),
+    passwordHash: passwordData.hash,
+    passwordSalt: passwordData.salt,
+    joinedAt: Date.now(),
+    lastSeen: Date.now(),
+  });
+  verifiedRegistrations.delete(verificationToken);
+
+  return sendJson(res, 201, { ok: true, email: verified.email });
+}
+
+async function handleLogin(req, res) {
+  const body = await readBody(req);
+  const email = normalizeEmail(body.email);
+  const password = String(body.password || "");
+  const user = users.get(email);
+
+  if (!user || !verifyPassword(password, user)) {
+    return sendJson(res, 401, { error: "Invalid email or password." });
+  }
+
+  user.lastSeen = Date.now();
+  return sendJson(res, 200, {
+    token: createJwt(user),
+    email: user.email,
+    displayName: user.displayName,
+  });
+}
+
+async function handleApi(req, res) {
+  if (req.method === "POST" && req.url === "/api/register/request-otp") {
+    return handleRegisterRequest(req, res);
+  }
+
+  if (req.method === "POST" && req.url === "/api/register/verify-otp") {
+    return handleVerifyOtp(req, res);
+  }
+
+  if (req.method === "POST" && req.url === "/api/register/complete") {
+    return handleCompleteRegistration(req, res);
+  }
+
+  if (req.method === "POST" && req.url === "/api/login") {
+    return handleLogin(req, res);
+  }
+
+  if (req.method === "POST" && req.url === "/api/logout") {
+    return sendJson(res, 200, { ok: true });
+  }
+
+  const session = getSession(req);
+  if (!session) {
+    return sendJson(res, 401, { error: "Please log in again." });
+  }
+
+  if (req.method === "GET" && req.url === "/api/me") {
+    return sendJson(res, 200, {
+      email: session.user.email,
+      displayName: session.user.displayName,
+    });
+  }
+
+  if (req.method === "GET" && req.url === "/api/users") {
+    return sendJson(res, 200, { users: getUsersFor(session.email) });
+  }
+
+  if (req.method === "GET" && req.url.startsWith("/api/messages")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const withEmail = normalizeEmail(url.searchParams.get("with"));
+    const after = Number(url.searchParams.get("after") || 0);
+
+    if (!withEmail || !users.has(withEmail)) {
+      return sendJson(res, 404, { error: "User not found." });
+    }
+
+    const key = conversationKey(session.email, withEmail);
+    const chat = messages.filter((message) => message.chat === key && message.id > after);
+    return sendJson(res, 200, { messages: chat });
+  }
+
+  if (req.method === "POST" && req.url === "/api/messages") {
+    const body = await readBody(req);
+    const message = createMessage({
+      sender: session.user,
+      toEmail: normalizeEmail(body.to),
+      text: body.text,
+    });
+
+    io.to(`user:${message.fromEmail}`).to(`user:${message.toEmail}`).emit("private:message", message);
+    return sendJson(res, 201, { message });
+  }
+
+  return sendJson(res, 404, { error: "Not found." });
+}
+
+function serveStatic(req, res) {
+  const rawPath = req.url === "/" ? "index.html" : req.url.split("?")[0];
+  const safePath = path
+    .normalize(decodeURIComponent(rawPath))
+    .replace(/^(\.\.[/\\])+/, "")
+    .replace(/^[/\\]+/, "");
+  const filePath = path.resolve(FRONTEND_DIR, safePath);
+
+  if (!filePath.startsWith(`${FRONTEND_DIR}${path.sep}`) && filePath !== FRONTEND_DIR) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+
+  fs.readFile(filePath, (error, content) => {
+    if (error) {
+      res.writeHead(404);
+      return res.end("Not found");
+    }
+
+    const ext = path.extname(filePath);
+    const type =
+      ext === ".html" ? "text/html" : ext === ".css" ? "text/css" : "application/javascript";
+
+    res.writeHead(200, { "Content-Type": type });
+    res.end(content);
+  });
+}
+
+const server = http.createServer((req, res) => {
+  if (req.url.startsWith("/api/")) {
+    handleApi(req, res).catch((error) => sendJson(res, 400, { error: error.message }));
+    return;
+  }
+
+  serveStatic(req, res);
+});
+
+const io = new Server(server);
+
+function broadcastUsersUpdate() {
+  io.emit("users:update");
+}
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+  const payload = verifyJwtToken(token);
+
+  if (!payload) {
+    next(new Error("Unauthorized"));
+    return;
+  }
+
+  const email = normalizeEmail(payload.sub || payload.email);
+  const user = users.get(email);
+
+  if (!user) {
+    next(new Error("Unauthorized"));
+    return;
+  }
+
+  socket.user = user;
+  next();
+});
+
+io.on("connection", (socket) => {
+  const user = socket.user;
+  activeUsers.set(user.email, (activeUsers.get(user.email) || 0) + 1);
+  user.lastSeen = Date.now();
+  socket.join(`user:${user.email}`);
+  broadcastUsersUpdate();
+
+  socket.on("private:message", (payload, callback) => {
+    try {
+      const message = createMessage({
+        sender: user,
+        toEmail: normalizeEmail(payload && payload.to),
+        text: payload && payload.text,
+      });
+
+      io.to(`user:${message.fromEmail}`)
+        .to(`user:${message.toEmail}`)
+        .emit("private:message", message);
+      if (typeof callback === "function") callback({ ok: true, message });
+    } catch (error) {
+      if (typeof callback === "function") callback({ ok: false, error: error.message });
+    }
+  });
+
+  socket.on("disconnect", () => {
+    const count = activeUsers.get(user.email) || 0;
+    if (count <= 1) {
+      activeUsers.delete(user.email);
+      user.lastSeen = Date.now();
+    } else {
+      activeUsers.set(user.email, count - 1);
+    }
+    broadcastUsersUpdate();
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Chat app running at http://localhost:${PORT}`);
+});

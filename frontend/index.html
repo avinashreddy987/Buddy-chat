@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>One-to-One Chat</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section id="authView" class="auth-shell">
+        <aside class="auth-brand">
+          <p class="eyebrow">Private chat</p>
+          <h1>Verified accounts for one-to-one conversations</h1>
+          <div class="auth-points">
+            <span>Email OTP</span>
+            <span>Password login</span>
+            <span>Private messages</span>
+          </div>
+        </aside>
+
+        <section class="auth-card">
+          <div class="auth-tabs" role="tablist" aria-label="Account">
+            <button id="showLoginTab" class="tab-button active" type="button">Login</button>
+            <button id="showRegisterTab" class="tab-button" type="button">Create account</button>
+          </div>
+
+          <div id="loginPanel" class="auth-panel">
+            <div class="panel-title">
+              <p class="eyebrow">Welcome back</p>
+              <h2>Login to chat</h2>
+            </div>
+            <form id="loginForm" class="stacked-form">
+              <label>
+                Email
+                <input id="loginEmailInput" type="email" autocomplete="email" placeholder="you@example.com" required />
+              </label>
+              <label>
+                Password
+                <input id="loginPasswordInput" type="password" autocomplete="current-password" placeholder="Your password" required />
+              </label>
+              <button type="submit">Login</button>
+            </form>
+            <p id="loginMessage" class="success" role="status"></p>
+            <p id="loginError" class="error" role="alert"></p>
+          </div>
+
+          <div id="registerPanel" class="auth-panel hidden">
+            <div class="panel-title">
+              <p class="eyebrow">New account</p>
+              <h2>Create your account</h2>
+            </div>
+
+            <ol class="step-list" aria-label="Signup steps">
+              <li id="emailStep" class="active">Email</li>
+              <li id="otpStep">OTP</li>
+              <li id="passwordStep">Password</li>
+            </ol>
+
+            <form id="registerEmailForm" class="stacked-form">
+              <label>
+                Email
+                <input id="registerEmailInput" type="email" autocomplete="email" placeholder="you@example.com" required />
+              </label>
+              <button type="submit">Send OTP</button>
+            </form>
+
+            <form id="otpForm" class="stacked-form hidden">
+              <div class="verified-email">
+                <span>Code sent to</span>
+                <strong id="pendingEmailText"></strong>
+              </div>
+              <label>
+                Verification code
+                <input id="otpInput" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 digit code" required />
+              </label>
+              <div class="form-actions">
+                <button type="submit">Verify OTP</button>
+                <button id="resendOtpButton" class="ghost-button" type="button">Resend</button>
+              </div>
+            </form>
+
+            <form id="passwordForm" class="stacked-form hidden">
+              <label>
+                Password
+                <input id="passwordInput" type="password" autocomplete="new-password" placeholder="At least 8 characters" required />
+              </label>
+              <label>
+                Confirm password
+                <input id="confirmPasswordInput" type="password" autocomplete="new-password" placeholder="Repeat password" required />
+              </label>
+              <button type="submit">Create account</button>
+            </form>
+
+            <p id="registerMessage" class="success" role="status"></p>
+            <p id="registerError" class="error" role="alert"></p>
+          </div>
+        </section>
+      </section>
+
+      <section id="chatView" class="chat-shell hidden">
+        <aside class="sidebar">
+          <div class="profile-row">
+            <div class="profile-copy">
+              <p class="eyebrow">Signed in</p>
+              <strong id="currentUser"></strong>
+              <span id="currentEmail"></span>
+            </div>
+            <button id="logoutButton" class="ghost-button" type="button">Logout</button>
+          </div>
+          <div class="section-heading">People</div>
+          <div id="usersList" class="users-list"></div>
+        </aside>
+
+        <section class="conversation">
+          <header class="conversation-header">
+            <div>
+              <p class="eyebrow">Chatting with</p>
+              <h2 id="chatTitle">Choose a user</h2>
+            </div>
+            <span id="chatStatus" class="status-pill">Waiting</span>
+          </header>
+
+          <div id="emptyState" class="empty-state">Create another account in a different browser, then select that person here.</div>
+          <div id="messagesList" class="messages-list hidden"></div>
+
+          <form id="messageForm" class="message-form">
+            <input id="messageInput" type="text" placeholder="Type a message" maxlength="1000" disabled />
+            <button id="sendButton" type="submit" disabled>Send</button>
+          </form>
+          <p id="chatError" class="error" role="alert"></p>
+        </section>
+      </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

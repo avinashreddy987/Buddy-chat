@@ -1,0 +1,15 @@
+{
+  "name": "one-to-one-chat",
+  "version": "1.0.0",
+  "description": "Email OTP, JWT, and Socket.IO one-to-one chat demo.",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^8.0.10",
+    "socket.io": "^4.8.1"
+  }
+}
