@@ -329,22 +329,17 @@ async function handleRegisterRequest(req, res) {
 
   const otp = generateOtp();
   const otpSalt = crypto.randomBytes(16).toString("hex");
-
-  try {
-    await sendOtpEmail(email, otp);
-  } catch (err) {
-    console.error("Failed to send OTP email:", err && err.message ? err.message : err);
-    return sendJson(res, 502, {
-      error:
-        "Failed to send verification email. Check SMTP configuration (see .env.example) or server logs.",
-    });
-  }
-
+  // Persist the OTP info first so the API can return quickly.
   pendingOtps.set(email, {
     otpHash: hashOtp(email, otp, otpSalt),
     otpSalt,
     attempts: 0,
     expiresAt: Date.now() + OTP_TTL_MS,
+  });
+
+  // Send the email asynchronously; don't block the request on SMTP latency.
+  sendOtpEmail(email, otp).catch((err) => {
+    console.error("Failed to send OTP email (background):", err && err.message ? err.message : err);
   });
 
   return sendJson(res, 200, { ok: true, email });
@@ -611,10 +606,28 @@ io.on("connection", (socket) => {
   });
 });
 
+function tryListen(port, attemptsLeft = 5) {
+  server.once("error", (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      if (attemptsLeft > 0) {
+        console.warn(`Port ${port} in use, trying ${port + 1}...`);
+        setTimeout(() => tryListen(port + 1, attemptsLeft - 1), 300);
+        return;
+      }
+      console.error(`Port ${port} in use and no retries left. Exiting.`);
+      process.exit(1);
+    }
+    console.error("Server error:", err && err.message ? err.message : err);
+    process.exit(1);
+  });
+
+  server.listen(port, () => {
+    console.log(`Chat app running at http://localhost:${port}`);
+  });
+}
+
 initDb()
   .catch(() => {})
   .finally(() => {
-    server.listen(PORT, () => {
-      console.log(`Chat app running at http://localhost:${PORT}`);
-    });
+    tryListen(Number(PORT) || 3000);
   });
