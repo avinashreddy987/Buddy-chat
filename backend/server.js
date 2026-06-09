@@ -272,11 +272,13 @@ async function sendOtpEmail(email, otp) {
 
     // transporter verification and send with retries
     try {
+      console.log("Verifying SMTP connection...");
       await transporter.verify();
+      console.log("SMTP verification successful");
     } catch (err) {
-      console.warn("SMTP verification failed:", err && err.message ? err.message : err);
+      console.error("SMTP verification failed:", err.message);
     }
-
+    
     let lastErr = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
