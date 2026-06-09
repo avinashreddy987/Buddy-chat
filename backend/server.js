@@ -226,6 +226,7 @@ async function sendOtpEmail(email, otp) {
         user: smtp.user,
         pass: smtp.pass,
       },
+      family: 4,
       connectionTimeout: 30000,
       greetingTimeout: 30000,
       socketTimeout: 30000,
