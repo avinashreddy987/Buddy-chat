@@ -10,7 +10,6 @@
     "dotenv": "^16.4.7",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^5.7.0",
-    "nodemailer": "^8.0.10",
     "resend": "^6.12.4",
     "socket.io": "^4.8.1"
   }

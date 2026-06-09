@@ -6,7 +6,6 @@ const crypto = require("crypto");
 require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
 const { Resend } = require("resend");
 const { Server } = require("socket.io");
 const { MongoClient } = require("mongodb");
@@ -192,25 +191,11 @@ function getSession(req) {
   return { email, user };
 }
 
-function getSmtpConfig() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || user;
-  const secure = process.env.SMTP_SECURE === "true" || port === 465;
-
-  if (!host || !user || !pass || !from) {
-    throw new Error(
-      "Email service is not configured. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM in .env."
-    );
-  }
-
-  return { host, port, user, pass, from, secure };
-}
+// Resend is used for all email delivery; remove legacy SMTP/Nodemailer helpers.
 
 async function sendOtpEmail(email, otp) {
   try {
+    console.log("Sending OTP via Resend...");
     const result = await resend.emails.send({
       from: "onboarding@resend.dev",
       to: email,
@@ -225,11 +210,10 @@ async function sendOtpEmail(email, otp) {
       `,
     });
 
-    console.log("Email sent successfully:", result);
+    console.log("OTP email sent successfully");
     return result;
-
   } catch (err) {
-    console.error("Resend Error:", err);
+    console.error("Resend Error:", err && err.message ? err.message : err);
     throw err;
   }
 }
@@ -309,39 +293,7 @@ async function handleRegisterRequest(req, res) {
   // (common during testing) send synchronously and return delivery info so
   // the requester can see a preview or messageId immediately. Otherwise
   // send in background for speed.
-  try {
-    const smtpCfg = (() => {
-      try {
-        return getSmtpConfig();
-      } catch {
-        return null;
-      }
-    })();
-
-    const smtpUser = smtpCfg && smtpCfg.user ? normalizeEmail(smtpCfg.user) : "";
-    const smtpFrom = smtpCfg && smtpCfg.from ? normalizeEmail(smtpCfg.from) : "";
-
-    if (smtpUser && (smtpUser === email || smtpFrom === email)) {
-      // synchronous send for immediate feedback during testing
-      try {
-        const info = await sendOtpEmail(email, otp);
-        const rec = pendingOtps.get(email);
-        if (rec) {
-          rec.emailSent = true;
-          rec.sentAt = Date.now();
-          rec.emailInfo = info && info.messageId ? { messageId: info.messageId } : null;
-          rec.emailPreview = nodemailer.getTestMessageUrl(info) || null;
-        }
-        return sendJson(res, 200, { ok: true, email, sent: true, emailInfo: rec.emailInfo, preview: rec.emailPreview });
-      } catch (err) {
-        const rec = pendingOtps.get(email);
-        if (rec) rec.emailError = err && err.message ? err.message : String(err);
-        return sendJson(res, 502, { error: "Failed to send verification email (test mode).", detail: rec.emailError });
-      }
-    }
-  } catch (e) {
-    // ignore smtp detection errors and fall back to background send
-  }
+  // Send the email asynchronously; don't block the request on delivery latency.
 
   // Send the email asynchronously; don't block the request on SMTP latency.
   (async () => {
@@ -427,39 +379,6 @@ async function handlePasswordSendOtp(req, res) {
     emailError: null,
     purpose: "password-reset",
   });
-
-  try {
-    const smtpCfg = (() => {
-      try {
-        return getSmtpConfig();
-      } catch {
-        return null;
-      }
-    })();
-
-    const smtpUser = smtpCfg && smtpCfg.user ? normalizeEmail(smtpCfg.user) : "";
-    const smtpFrom = smtpCfg && smtpCfg.from ? normalizeEmail(smtpCfg.from) : "";
-
-    if (smtpUser && (smtpUser === email || smtpFrom === email)) {
-      try {
-        const info = await sendOtpEmail(email, otp);
-        const rec = pendingOtps.get(email);
-        if (rec) {
-          rec.emailSent = true;
-          rec.sentAt = Date.now();
-          rec.emailInfo = info && info.messageId ? { messageId: info.messageId } : null;
-          rec.emailPreview = nodemailer.getTestMessageUrl(info) || null;
-        }
-        return sendJson(res, 200, { ok: true, email, sent: true, preview: rec.emailPreview });
-      } catch (err) {
-        const rec = pendingOtps.get(email);
-        if (rec) rec.emailError = err && err.message ? err.message : String(err);
-        return sendJson(res, 502, { error: "Failed to send verification email (test mode)." });
-      }
-    }
-  } catch (e) {
-    // ignore smtp detection errors
-  }
 
   (async () => {
     try {
