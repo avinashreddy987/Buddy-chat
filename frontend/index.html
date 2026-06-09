@@ -106,7 +106,6 @@
               <strong id="currentUser"></strong>
               <span id="currentEmail"></span>
             </div>
-            <button id="logoutButton" class="ghost-button" type="button">Logout</button>
           </div>
           <div class="section-heading">People</div>
           <div id="usersList" class="users-list"></div>
@@ -119,6 +118,22 @@
               <h2 id="chatTitle">Choose a user</h2>
             </div>
             <span id="chatStatus" class="status-pill">Waiting</span>
+            <div class="header-actions">
+              <button id="profileButton" class="profile-btn" type="button" aria-haspopup="true" aria-expanded="false">
+                <span id="headerAvatar" class="avatar avatar-mini">U</span>
+              </button>
+
+              <div id="profileMenu" class="profile-menu hidden" role="menu">
+                <div class="profile-menu-header">
+                  <strong id="menuDisplayName"></strong>
+                  <small id="menuEmail"></small>
+                </div>
+                <div class="profile-menu-actions">
+                  <button id="changePasswordBtn" class="menu-item" type="button">Change Password</button>
+                  <button id="menuLogoutBtn" class="menu-item" type="button">Logout</button>
+                </div>
+              </div>
+            </div>
           </header>
 
           <div id="emptyState" class="empty-state">Create another account in a different browser, then select that person here.</div>
@@ -132,6 +147,85 @@
         </section>
       </section>
     </main>
+
+    <!-- Change Password Modal -->
+    <div id="changePasswordModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="changePasswordTitle">
+        <header>
+          <h3 id="changePasswordTitle">Change Password</h3>
+          <button id="closeChangePassword" class="close-btn" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <form id="changePasswordForm">
+            <div id="cpStepCurrent">
+              <label>
+                Current password
+                <input id="cpCurrentPassword" type="password" autocomplete="current-password" required />
+              </label>
+              <div class="form-actions">
+                <button id="cpSendOtpButton" type="button">Send OTP</button>
+                <button id="cpCancelBtn" class="ghost-button" type="button">Cancel</button>
+              </div>
+              <p id="cpStatus" class="success"></p>
+              <p id="cpError" class="error"></p>
+            </div>
+
+            <div id="cpStepOtp" class="hidden">
+              <label>
+                Verification code
+                <input id="cpOtpInput" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+              </label>
+              <div class="form-actions">
+                <button id="cpVerifyOtpButton" type="button">Verify OTP</button>
+                <button id="cpResendOtpButton" class="ghost-button" type="button">Resend</button>
+              </div>
+            </div>
+
+            <div id="cpStepNew" class="hidden">
+              <label>
+                New password
+                <input id="cpNewPassword" type="password" autocomplete="new-password" required />
+              </label>
+              <label>
+                Confirm password
+                <input id="cpConfirmNewPassword" type="password" autocomplete="new-password" required />
+              </label>
+              <div class="form-actions">
+                <button id="cpUpdateButton" type="button">Update Password</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Profile Details Page (shown after login before chat) -->
+    <section id="profileDetailsView" class="profile-details-shell hidden">
+      <div class="auth-card">
+        <div class="panel-title">
+          <p class="eyebrow">Your profile</p>
+          <h2>Enter your username and details</h2>
+        </div>
+
+        <form id="profileDetailsForm" class="stacked-form">
+          <label>
+            Display name
+            <input id="pdDisplayName" type="text" maxlength="60" placeholder="How should people see you?" required />
+          </label>
+          <label>
+            Short bio (optional)
+            <input id="pdBio" type="text" maxlength="140" placeholder="A short tagline" />
+          </label>
+          <div class="form-actions">
+            <button id="pdContinue" type="submit">Continue to chat</button>
+            <button id="pdSkip" class="ghost-button" type="button">Skip</button>
+          </div>
+          <p id="pdMessage" class="success"></p>
+          <p id="pdError" class="error"></p>
+        </form>
+      </div>
+    </section>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/app.js"></script>

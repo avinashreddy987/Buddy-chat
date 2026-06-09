@@ -25,7 +25,7 @@ const otpStep = document.querySelector("#otpStep");
 const passwordStep = document.querySelector("#passwordStep");
 const currentUser = document.querySelector("#currentUser");
 const currentEmail = document.querySelector("#currentEmail");
-const logoutButton = document.querySelector("#logoutButton");
+// left-corner logout removed; logout remains in profile menu
 const usersList = document.querySelector("#usersList");
 const chatTitle = document.querySelector("#chatTitle");
 const chatStatus = document.querySelector("#chatStatus");
@@ -35,6 +35,30 @@ const messageForm = document.querySelector("#messageForm");
 const messageInput = document.querySelector("#messageInput");
 const sendButton = document.querySelector("#sendButton");
 const chatError = document.querySelector("#chatError");
+const profileButton = document.querySelector("#profileButton");
+const profileMenu = document.querySelector("#profileMenu");
+const menuDisplayName = document.querySelector("#menuDisplayName");
+const menuEmail = document.querySelector("#menuEmail");
+const changePasswordBtn = document.querySelector("#changePasswordBtn");
+const menuLogoutBtn = document.querySelector("#menuLogoutBtn");
+const headerAvatar = document.querySelector("#headerAvatar");
+
+// Change password modal elements
+const changePasswordModal = document.querySelector("#changePasswordModal");
+const cpCurrentPassword = document.querySelector("#cpCurrentPassword");
+const cpSendOtpButton = document.querySelector("#cpSendOtpButton");
+const cpStatus = document.querySelector("#cpStatus");
+const cpError = document.querySelector("#cpError");
+const cpOtpInput = document.querySelector("#cpOtpInput");
+const cpVerifyOtpButton = document.querySelector("#cpVerifyOtpButton");
+const cpResendOtpButton = document.querySelector("#cpResendOtpButton");
+const cpNewPassword = document.querySelector("#cpNewPassword");
+const cpConfirmNewPassword = document.querySelector("#cpConfirmNewPassword");
+const cpUpdateButton = document.querySelector("#cpUpdateButton");
+const cpCancelBtn = document.querySelector("#cpCancelBtn");
+const closeChangePassword = document.querySelector("#closeChangePassword");
+
+let cpVerificationToken = "";
 
 let token = localStorage.getItem("chatToken") || "";
 let email = localStorage.getItem("chatEmail") || "";
@@ -45,6 +69,12 @@ let socket = null;
 let usersTimer = null;
 let pendingEmail = "";
 let verificationToken = "";
+const profileDetailsView = document.querySelector("#profileDetailsView");
+const profileDetailsForm = document.querySelector("#profileDetailsForm");
+const pdDisplayName = document.querySelector("#pdDisplayName");
+const pdBio = document.querySelector("#pdBio");
+const pdMessage = document.querySelector("#pdMessage");
+const pdError = document.querySelector("#pdError");
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -113,8 +143,25 @@ function showChat() {
   chatView.classList.remove("hidden");
   currentUser.textContent = displayName;
   currentEmail.textContent = email;
+  // populate header profile
+  headerAvatar.textContent = getInitials(displayName);
+  menuDisplayName.textContent = displayName;
+  menuEmail.textContent = email;
   connectSocket();
   startUsersRefresh();
+}
+
+function showProfileDetails(prefill) {
+  authView.classList.add("hidden");
+  chatView.classList.add("hidden");
+  profileDetailsView.classList.remove("hidden");
+  pdMessage.textContent = "";
+  pdError.textContent = "";
+  pdDisplayName.value = prefill || displayName || "";
+}
+
+function hideProfileDetails() {
+  profileDetailsView.classList.add("hidden");
 }
 
 function showAuth() {
@@ -404,17 +451,145 @@ loginForm.addEventListener("submit", async (event) => {
     });
     storeSession(data);
     loginPasswordInput.value = "";
-    showChat();
+    // After login, prompt for profile details before entering chat
+    showProfileDetails(data.displayName || "");
   } catch (error) {
     loginError.textContent = error.message;
   }
 });
 
-logoutButton.addEventListener("click", async () => {
+// Profile menu toggle
+profileButton.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const isOpen = !profileMenu.classList.contains("hidden");
+  profileMenu.classList.toggle("hidden", isOpen);
+  profileButton.setAttribute("aria-expanded", String(!isOpen));
+});
+
+// close menu on outside click
+document.addEventListener("click", () => profileMenu.classList.add("hidden"));
+profileMenu.addEventListener("click", (e) => e.stopPropagation());
+
+menuLogoutBtn.addEventListener("click", async () => {
   try {
     await api("/api/logout", { method: "POST" });
   } finally {
     showAuth();
+  }
+});
+
+changePasswordBtn.addEventListener("click", () => {
+  openChangePasswordModal();
+  profileMenu.classList.add("hidden");
+});
+
+function openChangePasswordModal() {
+  cpVerificationToken = "";
+  cpCurrentPassword.value = "";
+  cpOtpInput.value = "";
+  cpNewPassword.value = "";
+  cpConfirmNewPassword.value = "";
+  cpStatus.textContent = "";
+  cpError.textContent = "";
+  // show only current password step
+  document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
+  document.querySelector("#cpStepCurrent").classList.remove("hidden");
+  changePasswordModal.classList.remove("hidden");
+}
+
+function closeChangePasswordModal() {
+  changePasswordModal.classList.add("hidden");
+}
+
+cpCancelBtn.addEventListener("click", closeChangePasswordModal);
+closeChangePassword.addEventListener("click", closeChangePasswordModal);
+
+// Send OTP (requires current password validation on server)
+cpSendOtpButton.addEventListener("click", async () => {
+  cpError.textContent = "";
+  cpStatus.textContent = "Sending OTP...";
+  cpSendOtpButton.disabled = true;
+  try {
+    const data = await api("/api/password/send-otp", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword: cpCurrentPassword.value }),
+    });
+    cpStatus.textContent = "OTP sent to your email.";
+    // show OTP step
+    document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
+    document.querySelector("#cpStepOtp").classList.remove("hidden");
+    cpOtpInput.focus();
+  } catch (err) {
+    cpError.textContent = err.message;
+    cpStatus.textContent = "";
+  } finally {
+    cpSendOtpButton.disabled = false;
+  }
+});
+
+cpResendOtpButton.addEventListener("click", async () => {
+  cpError.textContent = "";
+  cpStatus.textContent = "Resending OTP...";
+  cpResendOtpButton.disabled = true;
+  try {
+    await api("/api/password/send-otp", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword: cpCurrentPassword.value }),
+    });
+    cpStatus.textContent = "OTP resent.";
+    cpOtpInput.focus();
+  } catch (err) {
+    cpError.textContent = err.message;
+    cpStatus.textContent = "";
+  } finally {
+    cpResendOtpButton.disabled = false;
+  }
+});
+
+// Verify OTP
+cpVerifyOtpButton.addEventListener("click", async () => {
+  cpError.textContent = "";
+  cpStatus.textContent = "Verifying code...";
+  cpVerifyOtpButton.disabled = true;
+  try {
+    const data = await api("/api/password/verify-otp", {
+      method: "POST",
+      body: JSON.stringify({ email, otp: cpOtpInput.value }),
+    });
+    cpVerificationToken = data.verificationToken;
+    cpStatus.textContent = "Code verified. Enter a new password.";
+    document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
+    document.querySelector("#cpStepNew").classList.remove("hidden");
+    cpNewPassword.focus();
+  } catch (err) {
+    cpError.textContent = err.message;
+    cpStatus.textContent = "";
+  } finally {
+    cpVerifyOtpButton.disabled = false;
+  }
+});
+
+// Update password
+cpUpdateButton.addEventListener("click", async () => {
+  cpError.textContent = "";
+  if (cpNewPassword.value !== cpConfirmNewPassword.value) {
+    cpError.textContent = "Passwords do not match.";
+    return;
+  }
+  cpStatus.textContent = "Updating Password...";
+  cpUpdateButton.disabled = true;
+  try {
+    await api("/api/password/update", {
+      method: "POST",
+      body: JSON.stringify({ verificationToken: cpVerificationToken, password: cpNewPassword.value }),
+    });
+    cpStatus.textContent = "Password updated successfully.";
+    setTimeout(() => closeChangePasswordModal(), 900);
+  } catch (err) {
+    cpError.textContent = err.message;
+    cpStatus.textContent = "";
+  } finally {
+    cpUpdateButton.disabled = false;
   }
 });
 
@@ -444,9 +619,39 @@ if (token && email) {
       displayName = data.displayName;
       localStorage.setItem("chatEmail", email);
       localStorage.setItem("chatDisplayName", displayName);
-      showChat();
+      // Prompt user to confirm or enter a display name before chat
+      showProfileDetails(displayName || "");
     })
     .catch(showAuth);
 } else {
   showAuth();
 }
+
+// Handle profile details submission
+profileDetailsForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  pdError.textContent = "";
+  pdMessage.textContent = "Saving...";
+  try {
+    const data = await api("/api/me/update", {
+      method: "POST",
+      body: JSON.stringify({ displayName: pdDisplayName.value.trim() }),
+    });
+    // store updated token and displayName
+    storeSession({ token: data.token, email: data.email, displayName: data.displayName });
+    displayName = data.displayName;
+    localStorage.setItem("chatDisplayName", displayName);
+    pdMessage.textContent = "Profile saved.";
+    hideProfileDetails();
+    showChat();
+  } catch (err) {
+    pdError.textContent = err.message;
+    pdMessage.textContent = "";
+  }
+});
+
+document.querySelector("#pdSkip").addEventListener("click", () => {
+  // proceed without updating
+  hideProfileDetails();
+  showChat();
+});

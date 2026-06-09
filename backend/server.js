@@ -220,9 +220,9 @@ async function sendOtpEmail(email, otp) {
         user: smtp.user,
         pass: smtp.pass,
       },
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 10000,
+      connectionTimeout: 30000,
+      greetingTimeout: 30000,
+      socketTimeout: 30000,
       tls: { rejectUnauthorized: false },
     });
     mailFrom = smtp.from;
@@ -467,6 +467,157 @@ async function handleVerifyOtp(req, res) {
   return sendJson(res, 200, { verificationToken });
 }
 
+// Password reset: send OTP to logged-in user's email after validating current password
+async function handlePasswordSendOtp(req, res) {
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: "Please log in again." });
+
+  const body = await readBody(req);
+  const current = String(body.currentPassword || "");
+
+  if (!verifyPassword(current, session.user)) {
+    return sendJson(res, 401, { error: "Current password is incorrect." });
+  }
+
+  const email = session.user.email;
+  const otp = generateOtp();
+  const otpSalt = crypto.randomBytes(16).toString("hex");
+
+  pendingOtps.set(email, {
+    otpHash: hashOtp(email, otp, otpSalt),
+    otpSalt,
+    attempts: 0,
+    expiresAt: Date.now() + OTP_TTL_MS,
+    emailSent: false,
+    sentAt: null,
+    emailError: null,
+    purpose: "password-reset",
+  });
+
+  try {
+    const smtpCfg = (() => {
+      try {
+        return getSmtpConfig();
+      } catch {
+        return null;
+      }
+    })();
+
+    const smtpUser = smtpCfg && smtpCfg.user ? normalizeEmail(smtpCfg.user) : "";
+    const smtpFrom = smtpCfg && smtpCfg.from ? normalizeEmail(smtpCfg.from) : "";
+
+    if (smtpUser && (smtpUser === email || smtpFrom === email)) {
+      try {
+        const info = await sendOtpEmail(email, otp);
+        const rec = pendingOtps.get(email);
+        if (rec) {
+          rec.emailSent = true;
+          rec.sentAt = Date.now();
+          rec.emailInfo = info && info.messageId ? { messageId: info.messageId } : null;
+          rec.emailPreview = nodemailer.getTestMessageUrl(info) || null;
+        }
+        return sendJson(res, 200, { ok: true, email, sent: true, preview: rec.emailPreview });
+      } catch (err) {
+        const rec = pendingOtps.get(email);
+        if (rec) rec.emailError = err && err.message ? err.message : String(err);
+        return sendJson(res, 502, { error: "Failed to send verification email (test mode)." });
+      }
+    }
+  } catch (e) {
+    // ignore smtp detection errors
+  }
+
+  (async () => {
+    try {
+      const info = await sendOtpEmail(email, otp);
+      const rec = pendingOtps.get(email);
+      if (rec) {
+        rec.emailSent = true;
+        rec.sentAt = Date.now();
+        rec.emailInfo = info && info.messageId ? { messageId: info.messageId } : null;
+      }
+    } catch (err) {
+      const rec = pendingOtps.get(email);
+      if (rec) {
+        rec.emailError = err && err.message ? err.message : String(err);
+      }
+      console.error("Failed to send OTP email (background):", err && err.message ? err.message : err);
+    }
+  })();
+
+  return sendJson(res, 200, { ok: true, email });
+}
+
+// Verify OTP for password-reset purpose
+async function handlePasswordVerifyOtp(req, res) {
+  const body = await readBody(req);
+  const email = normalizeEmail(body.email);
+  const otp = String(body.otp || "").trim();
+  const pending = pendingOtps.get(email);
+
+  if (!pending || pending.purpose !== "password-reset") {
+    return sendJson(res, 400, { error: "Request a new verification code." });
+  }
+
+  if (Date.now() > pending.expiresAt) {
+    pendingOtps.delete(email);
+    return sendJson(res, 400, { error: "Verification code expired. Request a new one." });
+  }
+
+  if (pending.attempts >= MAX_OTP_ATTEMPTS) {
+    pendingOtps.delete(email);
+    return sendJson(res, 429, { error: "Too many wrong codes. Request a new one." });
+  }
+
+  const otpHash = hashOtp(email, otp, pending.otpSalt);
+  if (!safeEqualHex(otpHash, pending.otpHash)) {
+    pending.attempts += 1;
+    return sendJson(res, 400, { error: "Incorrect verification code." });
+  }
+
+  pendingOtps.delete(email);
+  const verificationToken = crypto.randomBytes(24).toString("hex");
+  verifiedRegistrations.set(verificationToken, {
+    email,
+    purpose: "password-reset",
+    expiresAt: Date.now() + VERIFIED_TTL_MS,
+  });
+
+  return sendJson(res, 200, { verificationToken });
+}
+
+// Complete password update after OTP verification
+async function handlePasswordUpdate(req, res) {
+  const body = await readBody(req);
+  const verificationToken = String(body.verificationToken || "");
+  const password = String(body.password || "");
+  const verified = verifiedRegistrations.get(verificationToken);
+
+  if (!verified || Date.now() > verified.expiresAt || verified.purpose !== "password-reset") {
+    verifiedRegistrations.delete(verificationToken);
+    return sendJson(res, 400, { error: "Verification expired. Start again." });
+  }
+
+  const passwordError = requirePassword(password);
+  if (passwordError) {
+    return sendJson(res, 400, { error: passwordError });
+  }
+
+  const user = users.get(verified.email);
+  if (!user) {
+    verifiedRegistrations.delete(verificationToken);
+    return sendJson(res, 404, { error: "User not found." });
+  }
+
+  const passwordData = hashPassword(password);
+  user.passwordHash = passwordData.hash;
+  user.passwordSalt = passwordData.salt;
+  saveUserToDb(user).catch(() => {});
+  verifiedRegistrations.delete(verificationToken);
+
+  return sendJson(res, 200, { ok: true });
+}
+
 async function handleCompleteRegistration(req, res) {
   const body = await readBody(req);
   const verificationToken = String(body.verificationToken || "");
@@ -545,6 +696,19 @@ async function handleApi(req, res) {
     return sendJson(res, 200, { ok: true });
   }
 
+  // Password reset endpoints (require authentication for sending OTP)
+  if (req.method === "POST" && req.url === "/api/password/send-otp") {
+    return handlePasswordSendOtp(req, res);
+  }
+
+  if (req.method === "POST" && req.url === "/api/password/verify-otp") {
+    return handlePasswordVerifyOtp(req, res);
+  }
+
+  if (req.method === "POST" && req.url === "/api/password/update") {
+    return handlePasswordUpdate(req, res);
+  }
+
   const session = getSession(req);
   if (!session) {
     return sendJson(res, 401, { error: "Please log in again." });
@@ -555,6 +719,24 @@ async function handleApi(req, res) {
       email: session.user.email,
       displayName: session.user.displayName,
     });
+  }
+
+  if (req.method === "POST" && req.url === "/api/me/update") {
+    // update current user's profile (displayName)
+    const body = await readBody(req);
+    const displayName = String((body.displayName || "")).trim().slice(0, 60);
+
+    if (!displayName) {
+      return sendJson(res, 400, { error: "Display name is required." });
+    }
+
+    session.user.displayName = displayName;
+    // persist
+    saveUserToDb(session.user).catch(() => {});
+
+    // issue a new token so clients can keep displayName in JWT
+    const token = createJwt(session.user);
+    return sendJson(res, 200, { ok: true, token, email: session.user.email, displayName: session.user.displayName });
   }
 
   if (req.method === "GET" && req.url === "/api/users") {
