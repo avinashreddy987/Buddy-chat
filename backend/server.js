@@ -7,6 +7,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 const { Server } = require("socket.io");
 const { MongoClient } = require("mongodb");
 
@@ -17,6 +18,8 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 const OTP_TTL_MS = 10 * 60 * 1000;
 const VERIFIED_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 if (!process.env.JWT_SECRET) {
   console.warn("JWT_SECRET is not set. Add a strong JWT_SECRET in .env before production use.");
@@ -207,106 +210,28 @@ function getSmtpConfig() {
 }
 
 async function sendOtpEmail(email, otp) {
-  let transporter;
-  let mailFrom;
-
   try {
-    const smtp = getSmtpConfig();
-    console.log("SMTP CONFIG:");
-    console.log("HOST:", smtp.host);
-    console.log("PORT:", smtp.port);
-    console.log("SECURE:", smtp.secure);
-    console.log("USER:", smtp.user);
-    
-    transporter = nodemailer.createTransport({
-      host: smtp.host,
-      port: smtp.port,
-      secure: smtp.secure,
-      auth: {
-        user: smtp.user,
-        pass: smtp.pass,
-      },
-      family: 4,
-      connectionTimeout: 30000,
-      greetingTimeout: 30000,
-      socketTimeout: 30000,
-      tls: { rejectUnauthorized: false },
+    const result = await resend.emails.send({
+      from: "onboarding@resend.dev",
+      to: email,
+      subject: "Your Chat Verification Code",
+      html: `
+        <div style="font-family:Arial,sans-serif">
+          <h2>Your Verification Code</h2>
+          <p>Use this OTP to verify your account:</p>
+          <h1>${otp}</h1>
+          <p>This code expires in 10 minutes.</p>
+        </div>
+      `,
     });
-    mailFrom = smtp.from;
+
+    console.log("Email sent successfully:", result);
+    return result;
+
   } catch (err) {
-    // If running in production, surface the error — don't silently fall back.
-    if (process.env.NODE_ENV === "production") throw err;
-
-    // Fallback to Ethereal test account for local development/testing
-    console.warn("SMTP not configured; using Ethereal test account for email preview.", err.message || err);
-    const testAccount = await nodemailer.createTestAccount();
-    transporter = nodemailer.createTransport({
-      host: "smtp.ethereal.email",
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass,
-      },
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 10000,
-    });
-    mailFrom = testAccount.user;
+    console.error("Resend Error:", err);
+    throw err;
   }
-
-  // send with a small retry loop to handle transient SMTP failures
-  const mailOptions = {
-    from: mailFrom,
-    to: email,
-    subject: "Your chat verification code",
-    text: `Your verification code is ${otp}. It expires in 10 minutes.`,
-    html: `
-      <div style="font-family:Arial,sans-serif;line-height:1.5;color:#172033">
-        <h2>Your verification code</h2>
-        <p>Use this code to create your chat account:</p>
-        <p style="font-size:28px;font-weight:700;letter-spacing:4px">${otp}</p>
-        <p>This code expires in 10 minutes.</p>
-      </div>
-    `,
-  };
-
-    // transporter verification and send with retries
-    try {
-      console.log("Verifying SMTP connection...");
-      await transporter.verify();
-      console.log("SMTP verification successful");
-    } catch (err) {
-      console.error("SMTP verification failed:", err.message);
-    }
-    
-    let lastErr = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        console.log(`Sending OTP email to ${email} (attempt ${attempt})`);
-        const info = await transporter.sendMail(mailOptions);
-        try {
-          const preview = nodemailer.getTestMessageUrl(info);
-          if (preview) {
-            console.log("Ethereal preview URL:", preview);
-          } else if (info && info.messageId) {
-            console.log("Email sent, messageId:", info.messageId);
-          }
-        } catch (e) {
-          // ignore logging errors
-        }
-        return info;
-      } catch (err) {
-        lastErr = err;
-        console.warn(`Failed to send OTP email to ${email} (attempt ${attempt}):`,
-          err && err.message ? err.message : err);
-        // small backoff
-        await new Promise((r) => setTimeout(r, 500 * attempt));
-      }
-    }
-
-    // if we reach here, all attempts failed
-    throw lastErr || new Error("Failed to send email");
 }
 
 function getPublicUser(user) {
