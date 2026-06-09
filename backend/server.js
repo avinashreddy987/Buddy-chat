@@ -212,6 +212,12 @@ async function sendOtpEmail(email, otp) {
 
   try {
     const smtp = getSmtpConfig();
+    console.log("SMTP CONFIG:");
+    console.log("HOST:", smtp.host);
+    console.log("PORT:", smtp.port);
+    console.log("SECURE:", smtp.secure);
+    console.log("USER:", smtp.user);
+    
     transporter = nodemailer.createTransport({
       host: smtp.host,
       port: smtp.port,
