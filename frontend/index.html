@@ -106,14 +106,23 @@
 
       <section id="chatView" class="chat-shell hidden">
         <aside class="sidebar">
-          <div class="profile-row">
-            <div class="profile-copy">
-              <p class="eyebrow">Signed in</p>
-              <strong id="currentUser"></strong>
-              <span id="currentEmail"></span>
+          <div class="sidebar-top">
+            <div class="logo">
+              <div class="logo-mark">BC</div>
+              <div class="logo-text">Buddy Chat</div>
+            </div>
+            <div class="profile-row">
+              <div class="profile-copy">
+                <p class="eyebrow">Signed in</p>
+                <strong id="currentUser"></strong>
+                <span id="currentEmail"></span>
+              </div>
             </div>
           </div>
           <div class="section-heading">People</div>
+          <div class="users-search">
+            <input id="usersSearchInput" type="search" placeholder="Search people by name or email" />
+          </div>
           <div id="usersList" class="users-list"></div>
         </aside>
 
@@ -135,14 +144,26 @@
                   <small id="menuEmail"></small>
                 </div>
                 <div class="profile-menu-actions">
-                  <button id="changePasswordBtn" class="menu-item" type="button">Change Password</button>
-                  <button id="menuLogoutBtn" class="menu-item" type="button">Logout</button>
+                          <button id="viewProfileBtn" class="menu-item" type="button">View Profile</button>
+                          <button id="editProfileBtn" class="menu-item" type="button">Edit Profile</button>
+                          <button id="changePasswordBtn" class="menu-item" type="button">Change Password</button>
+                        
+                          <button id="menuLogoutBtn" class="menu-item" type="button">Logout</button>
                 </div>
               </div>
             </div>
           </header>
 
-          <div id="emptyState" class="empty-state">Create another account in a different browser, then select that person here.</div>
+          <div id="emptyState" class="empty-state">
+            <svg width="160" height="120" viewBox="0 0 160 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect x="8" y="16" width="144" height="88" rx="12" fill="#EAF6F3"/>
+              <circle cx="38" cy="48" r="16" fill="#CFEFE7"/>
+              <rect x="62" y="36" width="70" height="12" rx="6" fill="#DFF7F1"/>
+              <rect x="62" y="56" width="50" height="10" rx="5" fill="#DFF7F1"/>
+            </svg>
+            <div style="margin-top:12px; font-weight:800;">Select a user to start chatting.</div>
+            <div style="color:var(--muted); margin-top:6px;">Open a profile on the left to begin a private conversation.</div>
+          </div>
           <div id="messagesList" class="messages-list hidden"></div>
 
           <form id="messageForm" class="message-form">
@@ -202,6 +223,37 @@
               </div>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Profile Modal -->
+    <div id="profileModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
+        <header>
+          <h3 id="profileTitle">Profile</h3>
+          <button id="closeProfileModal" class="close-btn" type="button">×</button>
+        </header>
+        <div class="modal-body profile-card">
+          <div class="profile-grid">
+            <div class="profile-avatar">
+              <img id="pmAvatar" src="" alt="avatar" />
+            </div>
+            <div class="profile-info">
+              <h4 id="pmDisplayName"></h4>
+              <p id="pmEmail"></p>
+              <p id="pmBio" class="muted"></p>
+              <div class="profile-meta">
+                <span id="pmJoined"></span>
+                <span id="pmLastSeen"></span>
+              </div>
+            </div>
+          </div>
+          <div class="profile-actions">
+            <button id="pmEditBtn" class="google-btn">Edit Profile</button>
+            <button id="pmCloseBtn" class="ghost-button">Close</button>
+          </div>
         </div>
       </div>
     </div>

@@ -55,8 +55,11 @@ async function initDb() {
         authProvider: u.authProvider || "local",
         googleId: u.googleId || null,
         profilePicture: u.profilePicture || null,
+        bio: u.bio || "",
+        theme: u.theme || "light",
         joinedAt: u.joinedAt || Date.now(),
         lastSeen: u.lastSeen || Date.now(),
+        unread: u.unread || {},
       });
     }
     console.log(`Loaded ${all.length} users from MongoDB`);
@@ -239,13 +242,26 @@ function getPublicUser(user) {
     lastSeen: user.lastSeen,
     profilePicture: user.profilePicture || null,
     authProvider: user.authProvider || "local",
+    bio: user.bio || "",
+    joinedAt: user.joinedAt || Date.now(),
+    // `unreadCount` will be filled by getUsersFor(requester)
+    unreadCount: 0,
   };
 }
 
 function getUsersFor(email) {
+  const requester = users.get(email);
   return [...users.values()]
     .filter((user) => user.email !== email)
-    .map(getPublicUser)
+    .map((user) => {
+      const pu = getPublicUser(user);
+      try {
+        pu.unreadCount = (requester && requester.unread && Number(requester.unread[user.email]) ) || 0;
+      } catch (e) {
+        pu.unreadCount = 0;
+      }
+      return pu;
+    })
     .sort((a, b) => Number(b.online) - Number(a.online) || b.lastSeen - a.lastSeen);
 }
 
@@ -277,6 +293,21 @@ function createMessage({ sender, toEmail, text }) {
   };
 
   messages.push(message);
+
+  // increment unread counter for recipient
+  try {
+    const recip = users.get(recipient.email);
+    if (recip) {
+      recip.unread = recip.unread || {};
+      recip.unread[sender.email] = (recip.unread[sender.email] || 0) + 1;
+      // persist recipient unread counts
+      saveUserToDb(recip).catch(() => {});
+      // notify clients that user lists/unread changed
+      broadcastUsersUpdate();
+    }
+  } catch (err) {
+    // ignore
+  }
   return message;
 }
 
@@ -513,6 +544,9 @@ async function handleCompleteRegistration(req, res) {
     displayName: getDisplayName(verified.email),
     passwordHash: passwordData.hash,
     passwordSalt: passwordData.salt,
+    bio: "",
+    profilePicture: null,
+    theme: "light",
     joinedAt: Date.now(),
     lastSeen: Date.now(),
   });
@@ -565,6 +599,8 @@ async function handleGoogleAuth(req, res) {
         authProvider: "google",
         googleId: payload.sub,
         profilePicture: payload.picture || null,
+        bio: "",
+        theme: "light",
         joinedAt: Date.now(),
         lastSeen: Date.now(),
       };
@@ -639,6 +675,10 @@ async function handleApi(req, res) {
       displayName: session.user.displayName,
       profilePicture: session.user.profilePicture || null,
       authProvider: session.user.authProvider || "local",
+      bio: session.user.bio || "",
+      theme: session.user.theme || "light",
+      joinedAt: session.user.joinedAt || Date.now(),
+      lastSeen: session.user.lastSeen || Date.now(),
     });
   }
 
@@ -646,22 +686,41 @@ async function handleApi(req, res) {
     // update current user's profile (displayName)
     const body = await readBody(req);
     const displayName = String((body.displayName || "")).trim().slice(0, 60);
+    const bio = String((body.bio || "")).trim().slice(0, 500);
+    const profilePicture = String((body.profilePicture || "")).trim().slice(0, 1000) || null;
+    const theme = body.theme === "dark" ? "dark" : "light";
 
     if (!displayName) {
       return sendJson(res, 400, { error: "Display name is required." });
     }
 
     session.user.displayName = displayName;
+    session.user.bio = bio;
+    session.user.profilePicture = profilePicture;
+    session.user.theme = theme;
     // persist
     saveUserToDb(session.user).catch(() => {});
 
     // issue a new token so clients can keep displayName in JWT
     const token = createJwt(session.user);
-    return sendJson(res, 200, { ok: true, token, email: session.user.email, displayName: session.user.displayName });
+    return sendJson(res, 200, { ok: true, token, email: session.user.email, displayName: session.user.displayName, profilePicture: session.user.profilePicture || null, bio: session.user.bio || "", theme: session.user.theme || "light" });
   }
 
   if (req.method === "GET" && req.url === "/api/users") {
     return sendJson(res, 200, { users: getUsersFor(session.email) });
+  }
+
+  if (req.method === "POST" && req.url === "/api/unread/reset") {
+    const body = await readBody(req);
+    const withEmail = normalizeEmail(body.withEmail || "");
+    if (!withEmail) return sendJson(res, 400, { error: "withEmail is required" });
+    // reset unread counter for session.user for messages from withEmail
+    session.user.unread = session.user.unread || {};
+    session.user.unread[withEmail] = 0;
+    saveUserToDb(session.user).catch(() => {});
+    // notify others that counts changed
+    broadcastUsersUpdate();
+    return sendJson(res, 200, { ok: true });
   }
 
   if (req.method === "GET" && req.url.startsWith("/api/messages")) {
@@ -779,6 +838,17 @@ io.on("connection", (socket) => {
       if (typeof callback === "function") callback({ ok: true, message });
     } catch (error) {
       if (typeof callback === "function") callback({ ok: false, error: error.message });
+    }
+  });
+
+  // Typing indicator: relay to recipient
+  socket.on("typing", (payload) => {
+    try {
+      const toEmail = normalizeEmail(payload && payload.to);
+      if (!toEmail) return;
+      io.to(`user:${toEmail}`).emit("typing", { from: user.email, to: toEmail });
+    } catch (err) {
+      // ignore
     }
   });
 

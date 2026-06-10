@@ -42,6 +42,8 @@ const menuEmail = document.querySelector("#menuEmail");
 const changePasswordBtn = document.querySelector("#changePasswordBtn");
 const menuLogoutBtn = document.querySelector("#menuLogoutBtn");
 const headerAvatar = document.querySelector("#headerAvatar");
+const sidebarEl = document.querySelector('.sidebar');
+const logoMark = document.querySelector('.logo-mark');
 
 // Change password modal elements
 const changePasswordModal = document.querySelector("#changePasswordModal");
@@ -69,6 +71,7 @@ let socket = null;
 let usersTimer = null;
 let pendingEmail = "";
 let verificationToken = "";
+let usersCache = [];
 const profileDetailsView = document.querySelector("#profileDetailsView");
 const profileDetailsForm = document.querySelector("#profileDetailsForm");
 const pdDisplayName = document.querySelector("#pdDisplayName");
@@ -164,6 +167,11 @@ function showChat() {
   startUsersRefresh();
 }
 
+// dark mode removed — no-op placeholder
+function applyTheme(theme) {
+  return;
+}
+
 function showProfileDetails(prefill) {
   authView.classList.add("hidden");
   chatView.classList.add("hidden");
@@ -213,6 +221,16 @@ function connectSocket() {
 
   socket.on("users:update", loadUsers);
   socket.on("private:message", handleSocketMessage);
+  socket.on("typing", (payload) => {
+    if (!payload || !payload.from) return;
+    // show typing only when from selected user
+    if (selectedUser && payload.from === selectedUser.email) {
+      chatStatus.textContent = "Typing...";
+      setTimeout(() => {
+        chatStatus.textContent = selectedUser.online ? "Online" : "Offline";
+      }, 1800);
+    }
+  });
 }
 
 function disconnectSocket() {
@@ -223,7 +241,7 @@ function disconnectSocket() {
   socket = null;
 }
 
-function setChatTarget(user) {
+async function setChatTarget(user) {
   selectedUser = user;
   lastMessageId = 0;
   messagesList.innerHTML = "";
@@ -235,7 +253,16 @@ function setChatTarget(user) {
   chatStatus.textContent = user.online ? "Online" : "Offline";
   chatError.textContent = "";
 
-  loadMessages();
+  try {
+    // reset unread counter on the server for this conversation
+    await api('/api/unread/reset', { method: 'POST', body: JSON.stringify({ withEmail: user.email }) });
+  } catch (err) {
+    console.warn('Failed to reset unread', err.message || err);
+  }
+
+  await loadMessages();
+  // refresh user list to clear badge
+  await loadUsers();
   renderActiveUser();
   messageInput.focus();
 }
@@ -256,9 +283,12 @@ function getInitials(name) {
 }
 
 function renderUsers(users) {
+  usersCache = users || [];
+  const q = (document.getElementById('usersSearchInput') && document.getElementById('usersSearchInput').value || '').toLowerCase().trim();
+  const filtered = usersCache.filter(u => !q || (u.displayName && u.displayName.toLowerCase().includes(q)) || (u.email && u.email.toLowerCase().includes(q)));
   usersList.innerHTML = "";
 
-  if (!users.length) {
+  if (!filtered.length) {
     const empty = document.createElement("div");
     empty.className = "small-empty";
     empty.textContent = "No other accounts yet.";
@@ -266,7 +296,7 @@ function renderUsers(users) {
     return;
   }
 
-  users.forEach((user) => {
+  filtered.forEach((user) => {
     const button = document.createElement("button");
     const avatar = document.createElement("span");
     const copy = document.createElement("span");
@@ -294,13 +324,22 @@ function renderUsers(users) {
     presence.setAttribute("aria-label", user.online ? "Online" : "Offline");
 
     copy.append(name, mail);
-    button.append(avatar, copy, presence);
+    // unread badge
+    const unread = document.createElement('span');
+    unread.className = 'unread';
+    if (user.unreadCount && Number(user.unreadCount) > 0) {
+      unread.textContent = String(user.unreadCount);
+      unread.style.display = '';
+    } else {
+      unread.style.display = 'none';
+    }
+    button.append(avatar, copy, presence, unread);
     button.addEventListener("click", () => setChatTarget(user));
     usersList.appendChild(button);
   });
 
   if (selectedUser) {
-    const updatedSelected = users.find((user) => user.email === selectedUser.email);
+    const updatedSelected = usersCache.find((user) => user.email === selectedUser.email);
     if (updatedSelected) {
       selectedUser = updatedSelected;
       chatStatus.textContent = selectedUser.online ? "Online" : "Offline";
@@ -311,22 +350,25 @@ function renderUsers(users) {
 }
 
 function renderMessage(message) {
-  const item = document.createElement("article");
-  item.className = `message ${message.fromEmail === email ? "mine" : ""}`;
+  const item = document.createElement('article');
+  item.className = `message ${message.fromEmail === email ? 'mine' : ''}`;
 
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
   bubble.textContent = message.text;
 
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  meta.textContent = `${message.fromName} - ${new Date(message.createdAt).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  })}`;
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const ts = new Date(message.createdAt);
+  const time = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const showDate = now - ts.getTime() > day;
+  meta.textContent = `${message.fromName} • ${time}${showDate ? ' • ' + ts.toLocaleDateString() : ''}`;
 
   item.append(bubble, meta);
   messagesList.appendChild(item);
+  // auto scroll to latest
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
@@ -339,9 +381,25 @@ function isSelectedConversation(message) {
 }
 
 function handleSocketMessage(message) {
+  // If message is for current user and not the active conversation, increment unread locally
+  if (message.toEmail === email && (!selectedUser || selectedUser.email !== message.fromEmail)) {
+    incrementLocalUnread(message.fromEmail);
+  }
+
   if (!isSelectedConversation(message) || message.id <= lastMessageId) return;
   renderMessage(message);
   lastMessageId = Math.max(lastMessageId, message.id);
+}
+
+function incrementLocalUnread(fromEmail) {
+  const btn = document.querySelector(`.user-button[data-email="${fromEmail}"]`);
+  if (!btn) return;
+  const badge = btn.querySelector('.unread');
+  if (!badge) return;
+  let val = Number(badge.textContent) || 0;
+  val = val + 1;
+  badge.textContent = String(val);
+  badge.style.display = '';
 }
 
 async function loadUsers() {
@@ -414,6 +472,8 @@ resendOtpButton.addEventListener("click", async () => {
 otpForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearAuthMessages();
+      // ensure modal is visible when editing
+      profileModal.classList.remove('hidden');
 
   try {
     const data = await api("/api/register/verify-otp", {
@@ -633,6 +693,167 @@ messageForm.addEventListener("submit", (event) => {
   });
 });
 
+// typing indicator: emit when input changes
+messageInput.addEventListener('input', () => {
+  if (!socket || !socket.connected || !selectedUser) return;
+  try {
+    socket.emit('typing', { to: selectedUser.email });
+  } catch (e) {}
+});
+
+// Search input handler
+const usersSearchInput = document.getElementById('usersSearchInput');
+if (usersSearchInput) {
+  usersSearchInput.addEventListener('input', () => {
+    renderUsers(usersCache);
+  });
+}
+
+// Profile modal and actions
+const profileModal = document.getElementById('profileModal');
+const pmAvatar = document.getElementById('pmAvatar');
+const pmDisplayName = document.getElementById('pmDisplayName');
+const pmEmail = document.getElementById('pmEmail');
+const pmBio = document.getElementById('pmBio');
+const pmJoined = document.getElementById('pmJoined');
+const pmLastSeen = document.getElementById('pmLastSeen');
+const pmEditBtn = document.getElementById('pmEditBtn');
+const pmCloseBtn = document.getElementById('pmCloseBtn');
+const viewProfileBtn = document.getElementById('viewProfileBtn');
+const editProfileBtn = document.getElementById('editProfileBtn');
+
+function closeProfileModal() {
+  profileModal.classList.add('hidden');
+}
+
+async function openProfileModal() {
+  try {
+    const data = await api('/api/me');
+    pmDisplayName.textContent = data.displayName || '';
+    pmEmail.textContent = data.email || '';
+    pmBio.textContent = data.bio || '';
+    pmJoined.textContent = data.joinedAt ? `Joined ${new Date(data.joinedAt).toLocaleDateString()}` : '';
+    pmLastSeen.textContent = data.lastSeen ? `Last: ${new Date(data.lastSeen).toLocaleString()}` : '';
+    if (data.profilePicture) pmAvatar.src = data.profilePicture;
+    else pmAvatar.src = '';
+    profileModal.classList.remove('hidden');
+  } catch (err) {
+    console.error('Failed to load profile', err);
+  }
+}
+
+// open modal from profile menu
+if (viewProfileBtn) {
+  viewProfileBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    profileMenu.classList.add('hidden');
+    openProfileModal();
+  });
+}
+
+if (pmCloseBtn) pmCloseBtn.addEventListener('click', () => { closeProfileModal(); showChat(); });
+
+// Edit profile inside modal
+if (pmEditBtn) {
+  pmEditBtn.addEventListener('click', async () => {
+    // build an inline form
+    try {
+      const me = await api('/api/me');
+        const form = document.createElement('form');
+        form.className = 'profile-edit-form';
+        const fldName = document.createElement('label');
+        fldName.textContent = 'Display name';
+        const inpName = document.createElement('input');
+        inpName.name = 'displayName';
+        inpName.required = true;
+        inpName.value = me.displayName || '';
+        fldName.appendChild(inpName);
+
+        const fldBio = document.createElement('label');
+        fldBio.textContent = 'Bio';
+        const taBio = document.createElement('textarea');
+        taBio.name = 'bio';
+        taBio.value = me.bio || '';
+        fldBio.appendChild(taBio);
+
+        const fldAvatar = document.createElement('label');
+        fldAvatar.textContent = 'Avatar URL';
+        const inpAvatar = document.createElement('input');
+        inpAvatar.name = 'profilePicture';
+        inpAvatar.value = me.profilePicture || '';
+        fldAvatar.appendChild(inpAvatar);
+
+        // theme selection removed
+
+        const actions = document.createElement('div'); actions.className = 'form-actions';
+        const saveBtn = document.createElement('button'); saveBtn.type = 'submit'; saveBtn.textContent = 'Save';
+        const cancelBtn = document.createElement('button'); cancelBtn.type = 'button'; cancelBtn.className = 'cancel'; cancelBtn.textContent = 'Cancel';
+        actions.append(saveBtn, cancelBtn);
+
+        form.append(fldName, fldBio, fldAvatar, actions);
+        const panel = profileModal.querySelector('.modal-body');
+        panel.innerHTML = '';
+        panel.appendChild(form);
+        cancelBtn.addEventListener('click', () => { closeProfileModal(); showChat(); });
+        form.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const body = {
+            displayName: inpName.value,
+            bio: taBio.value,
+            profilePicture: inpAvatar.value
+          };
+          try {
+            const data = await api('/api/me/update', { method: 'POST', body: JSON.stringify(body) });
+            storeSession({ token: data.token, email: data.email, displayName: data.displayName, profilePicture: data.profilePicture });
+            displayName = data.displayName;
+            if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
+            // close modal and return to chat (home)
+            closeProfileModal();
+            showChat();
+          } catch (err) {
+            alert('Failed to save: ' + err.message);
+          }
+        });
+    } catch (err) {
+      alert('Failed to load profile for edit');
+    }
+  });
+}
+
+// also bind the menu-level edit button to open the modal in edit mode
+if (editProfileBtn) {
+  editProfileBtn.addEventListener('click', (e) => { e.preventDefault(); profileMenu.classList.add('hidden'); pmEditBtn.click(); });
+}
+
+// Defensive binding: ensure profile menu actions are attached when menu is opened
+function bindProfileMenuActions() {
+  const v = document.getElementById('viewProfileBtn');
+  const ebtn = document.getElementById('editProfileBtn');
+  if (v && !v.dataset.bound) {
+    v.addEventListener('click', (ev) => { ev.preventDefault(); profileMenu.classList.add('hidden'); openProfileModal(); });
+    v.dataset.bound = '1';
+  }
+  if (ebtn && !ebtn.dataset.bound) {
+    ebtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      profileMenu.classList.add('hidden');
+      // open modal first, then enter edit mode
+      openProfileModal().then(() => setTimeout(() => pmEditBtn && pmEditBtn.click(), 60));
+    });
+    ebtn.dataset.bound = '1';
+  }
+}
+
+// Bind once on load
+bindProfileMenuActions();
+// Re-bind when toggling the profile menu
+profileButton.addEventListener('click', bindProfileMenuActions);
+
+// Bind mobile sidebar toggle
+if (logoMark) {
+  logoMark.addEventListener('click', () => { if (sidebarEl) sidebarEl.classList.toggle('open'); });
+}
+
 if (token && email) {
   api("/api/me")
     .then((data) => {
@@ -640,8 +861,12 @@ if (token && email) {
       displayName = data.displayName;
       localStorage.setItem("chatEmail", email);
       localStorage.setItem("chatDisplayName", displayName);
-      // Prompt user to confirm or enter a display name before chat
-      showProfileDetails(displayName || "");
+      // Only prompt for profile details if displayName is missing
+      if (displayName && String(displayName).trim()) {
+        showChat();
+      } else {
+        showProfileDetails(displayName || "");
+      }
     })
     .catch(showAuth);
 } else {
@@ -676,15 +901,11 @@ async function initGoogleSignIn() {
           body: JSON.stringify({ idToken: resp.credential }),
         });
         storeSession(data);
-        // if Google provides a displayName, skip profile prompt
-        if (data.displayName) {
-          displayName = data.displayName;
-          localStorage.setItem('chatDisplayName', displayName);
-          if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
-          showChat();
-        } else {
-          showProfileDetails(data.displayName || '');
-        }
+        // Always prompt for profile details after first sign-in so users can confirm/edit
+        displayName = data.displayName || '';
+        localStorage.setItem('chatDisplayName', displayName);
+        if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
+        showProfileDetails(displayName || '');
       } catch (err) {
         loginError.textContent = err.message || 'Google sign-in failed.';
       }
