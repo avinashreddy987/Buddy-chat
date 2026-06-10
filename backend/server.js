@@ -201,6 +201,7 @@ function getSession(req) {
 async function sendOtpEmail(email, otp) {
   try {
     console.log("Sending OTP via Resend...");
+    console.log("RESEND KEY EXISTS:", !!process.env.RESEND_API_KEY);
     const result = await resend.emails.send({
       from: "onboarding@resend.dev",
       to: email,
@@ -214,6 +215,13 @@ async function sendOtpEmail(email, otp) {
         </div>
       `,
     });
+
+    console.log("RESEND RESULT:", JSON.stringify(result, null, 2));
+
+    if (result.error) {
+      console.error("RESEND ERROR:", result.error);
+      throw new Error(result.error.message || "Failed to send email");
+    }
 
     console.log("OTP email sent successfully");
     return result;
