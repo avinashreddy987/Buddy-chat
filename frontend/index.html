@@ -43,6 +43,12 @@
             </form>
             <p id="loginMessage" class="success" role="status"></p>
             <p id="loginError" class="error" role="alert"></p>
+            <div class="or-separator">
+              <span>OR</span>
+            </div>
+            <div id="googleSignIn" class="google-signin">
+              <button type="button" class="google-btn" disabled>Continue with Google</button>
+            </div>
           </div>
 
           <div id="registerPanel" class="auth-panel hidden">
@@ -228,6 +234,7 @@
     </section>
 
     <script src="/socket.io/socket.io.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="/app.js"></script>
   </body>
 </html>

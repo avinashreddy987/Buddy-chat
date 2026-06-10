@@ -9,6 +9,7 @@ const jwt = require("jsonwebtoken");
 const { Resend } = require("resend");
 const { Server } = require("socket.io");
 const { MongoClient } = require("mongodb");
+const { OAuth2Client } = require("google-auth-library");
 
 const PORT = process.env.PORT || 3000;
 const FRONTEND_DIR = path.resolve(__dirname, "..", "frontend");
@@ -19,6 +20,7 @@ const VERIFIED_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 if (!process.env.JWT_SECRET) {
   console.warn("JWT_SECRET is not set. Add a strong JWT_SECRET in .env before production use.");
@@ -50,6 +52,9 @@ async function initDb() {
         displayName: u.displayName,
         passwordHash: u.passwordHash,
         passwordSalt: u.passwordSalt,
+        authProvider: u.authProvider || "local",
+        googleId: u.googleId || null,
+        profilePicture: u.profilePicture || null,
         joinedAt: u.joinedAt || Date.now(),
         lastSeen: u.lastSeen || Date.now(),
       });
@@ -224,6 +229,8 @@ function getPublicUser(user) {
     displayName: user.displayName,
     online: activeUsers.has(user.email),
     lastSeen: user.lastSeen,
+    profilePicture: user.profilePicture || null,
+    authProvider: user.authProvider || "local",
   };
 }
 
@@ -525,7 +532,50 @@ async function handleLogin(req, res) {
     token: createJwt(user),
     email: user.email,
     displayName: user.displayName,
+    profilePicture: user.profilePicture || null,
   });
+}
+
+// Verify Google ID token and sign in or create account
+async function handleGoogleAuth(req, res) {
+  try {
+    const body = await readBody(req);
+    const idToken = String(body.idToken || "");
+    if (!idToken) return sendJson(res, 400, { error: "Missing idToken." });
+
+    const ticket = await googleClient.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
+    const payload = ticket.getPayload();
+    const email = normalizeEmail(payload.email || payload.email_verified && payload.email);
+    if (!email) return sendJson(res, 400, { error: "Could not verify Google account email." });
+
+    let user = users.get(email);
+    if (!user) {
+      // create new user record for Google user
+      user = {
+        email,
+        displayName: (payload.name && String(payload.name).slice(0, 60)) || getDisplayName(email),
+        authProvider: "google",
+        googleId: payload.sub,
+        profilePicture: payload.picture || null,
+        joinedAt: Date.now(),
+        lastSeen: Date.now(),
+      };
+      users.set(email, user);
+      saveUserToDb(user).catch(() => {});
+    } else {
+      // update google fields if missing
+      if (!user.profilePicture && payload.picture) user.profilePicture = payload.picture;
+      if (!user.googleId && payload.sub) user.googleId = payload.sub;
+      // do not overwrite passwordHash or authProvider for existing local accounts
+      saveUserToDb(user).catch(() => {});
+    }
+
+    const token = createJwt(user);
+    return sendJson(res, 200, { token, email: user.email, displayName: user.displayName, profilePicture: user.profilePicture || null });
+  } catch (err) {
+    console.error("Google auth error:", err && err.message ? err.message : err);
+    return sendJson(res, 400, { error: "Failed to verify Google token." });
+  }
 }
 
 async function handleApi(req, res) {
@@ -543,6 +593,14 @@ async function handleApi(req, res) {
 
   if (req.method === "POST" && req.url === "/api/login") {
     return handleLogin(req, res);
+  }
+
+  if (req.method === "POST" && req.url === "/api/auth/google") {
+    return handleGoogleAuth(req, res);
+  }
+
+  if (req.method === "GET" && req.url === "/api/config") {
+    return sendJson(res, 200, { googleClientId: process.env.GOOGLE_CLIENT_ID || "" });
   }
 
   if (req.method === "POST" && req.url === "/api/logout") {
@@ -571,6 +629,8 @@ async function handleApi(req, res) {
     return sendJson(res, 200, {
       email: session.user.email,
       displayName: session.user.displayName,
+      profilePicture: session.user.profilePicture || null,
+      authProvider: session.user.authProvider || "local",
     });
   }
 

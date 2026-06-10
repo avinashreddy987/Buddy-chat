@@ -120,9 +120,11 @@ function storeSession(data) {
   token = data.token;
   email = data.email;
   displayName = data.displayName;
+  const profilePicture = data.profilePicture || null;
   localStorage.setItem("chatToken", token);
   localStorage.setItem("chatEmail", email);
   localStorage.setItem("chatDisplayName", displayName);
+  if (profilePicture) localStorage.setItem("chatProfilePicture", profilePicture);
   localStorage.removeItem("chatUsername");
 }
 
@@ -135,6 +137,7 @@ function clearSession() {
   localStorage.removeItem("chatToken");
   localStorage.removeItem("chatEmail");
   localStorage.removeItem("chatDisplayName");
+  localStorage.removeItem("chatProfilePicture");
   localStorage.removeItem("chatUsername");
 }
 
@@ -144,7 +147,17 @@ function showChat() {
   currentUser.textContent = displayName;
   currentEmail.textContent = email;
   // populate header profile
-  headerAvatar.textContent = getInitials(displayName);
+  const profilePicture = localStorage.getItem("chatProfilePicture") || null;
+  if (profilePicture) {
+    headerAvatar.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = profilePicture;
+    img.alt = displayName;
+    img.className = 'avatar-img avatar-mini';
+    headerAvatar.appendChild(img);
+  } else {
+    headerAvatar.textContent = getInitials(displayName);
+  }
   menuDisplayName.textContent = displayName;
   menuEmail.textContent = email;
   connectSocket();
@@ -265,7 +278,15 @@ function renderUsers(users) {
     button.className = "user-button";
     button.dataset.email = user.email;
     avatar.className = "avatar";
-    avatar.textContent = getInitials(user.displayName);
+    if (user.profilePicture) {
+      const img = document.createElement('img');
+      img.src = user.profilePicture;
+      img.alt = user.displayName;
+      img.className = 'avatar-img';
+      avatar.appendChild(img);
+    } else {
+      avatar.textContent = getInitials(user.displayName);
+    }
     copy.className = "user-copy";
     name.textContent = user.displayName;
     mail.textContent = user.email;
@@ -626,6 +647,81 @@ if (token && email) {
 } else {
   showAuth();
 }
+
+// Initialize Google Sign-In button (if configured)
+async function initGoogleSignIn() {
+  try {
+    const cfg = await fetch('/api/config').then((r) => r.json());
+    const clientId = cfg.googleClientId || "";
+    const container = document.getElementById('googleSignIn');
+    // Always render a visible button so users see the option.
+    if (container && !clientId) {
+      container.innerHTML = '';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'google-btn';
+      btn.disabled = true;
+      btn.textContent = 'Continue with Google (configure GOOGLE_CLIENT_ID)';
+      btn.addEventListener('click', () => {
+        loginError.textContent = 'Google Sign-In is not configured. Set GOOGLE_CLIENT_ID in .env.';
+      });
+      container.appendChild(btn);
+      return;
+    }
+
+    const handleCredentialResponse = async (resp) => {
+      try {
+        const data = await api('/api/auth/google', {
+          method: 'POST',
+          body: JSON.stringify({ idToken: resp.credential }),
+        });
+        storeSession(data);
+        // if Google provides a displayName, skip profile prompt
+        if (data.displayName) {
+          displayName = data.displayName;
+          localStorage.setItem('chatDisplayName', displayName);
+          if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
+          showChat();
+        } else {
+          showProfileDetails(data.displayName || '');
+        }
+      } catch (err) {
+        loginError.textContent = err.message || 'Google sign-in failed.';
+      }
+    };
+
+    // Wait for google.accounts to be available
+    const waitForGoogle = () => new Promise((resolve) => {
+      if (window.google && google.accounts && google.accounts.id) return resolve();
+      const to = setInterval(() => {
+        if (window.google && google.accounts && google.accounts.id) {
+          clearInterval(to);
+          resolve();
+        }
+      }, 200);
+      setTimeout(() => resolve(), 3000);
+    });
+
+    await waitForGoogle();
+    if (!window.google || !google.accounts || !google.accounts.id) return;
+
+    google.accounts.id.initialize({
+      client_id: clientId,
+      callback: handleCredentialResponse,
+      ux_mode: 'popup',
+    });
+
+    // Render Google's official button inside our container
+    if (container) {
+      container.innerHTML = '';
+      google.accounts.id.renderButton(container, { theme: 'outline', size: 'large', text: 'continue_with' });
+    }
+  } catch (err) {
+    console.error('Failed to initialize Google Sign-In', err);
+  }
+}
+
+initGoogleSignIn();
 
 // Handle profile details submission
 profileDetailsForm.addEventListener("submit", async (e) => {

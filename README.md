@@ -44,3 +44,56 @@ If you have `RESEND_API_KEY` set the app will send OTPs via Resend. Check the se
 - This is a beginner/demo app, so accounts, sessions, and messages are stored in memory.
 - Restarting the server clears all users, sessions, and messages.
 - For a real app, add a database, rate limiting, password reset, HTTPS, and persistent message storage.
+
+## Google Sign-In (OAuth 2.0)
+
+This project now supports signing in with Google as an alternative to the existing Email/OTP + Password flow. Both methods authenticate users into the same application and persist Google users in MongoDB.
+
+Steps to enable Google Sign-In:
+
+1. Create a project in Google Cloud Console and configure OAuth consent.
+2. Create an OAuth 2.0 Client ID for a Web application.
+	 - Add `http://localhost:3000` to the Authorized JavaScript origins.
+	 - Add `http://localhost:3000` to the Authorized redirect URIs (not strictly required for the client-side flow but safe to include).
+3. Copy the `Client ID` value.
+
+Environment variables:
+
+- `GOOGLE_CLIENT_ID` — the OAuth 2.0 Client ID from Google Cloud.
+- `MONGODB_URI`, `MONGODB_DB` — existing MongoDB settings (if using MongoDB persistence).
+
+Backend changes:
+
+- Adds the `google-auth-library` package to verify ID tokens server-side.
+- New endpoint: `POST /api/auth/google` — accepts `{ idToken }`, verifies the token, creates or updates a user record, and returns a JWT and profile info.
+- New endpoint: `GET /api/config` — returns `{ googleClientId }` for the frontend.
+
+Frontend changes:
+
+- Adds a "Continue with Google" button below the existing login form (keeps the current login flow intact).
+- The Google Identity Services button opens the Google account picker and returns an ID token to the backend for verification.
+- Google users' profile pictures are displayed in the chat UI.
+
+Database schema notes:
+
+The MongoDB `users` documents now may include the following keys:
+
+{
+	authProvider: "google" | "local",
+	googleId: string | null,
+	email: string,
+	displayName: string,
+	profilePicture: string | null,
+	joinedAt: number,
+	lastSeen: number,
+	// local-only fields remain: passwordHash, passwordSalt
+}
+
+Install new dependency and restart:
+
+```bash
+npm install
+npm start
+```
+
+If you want me to also add a `.env.example` entry or automated setup script for Google credentials, I can add that next.

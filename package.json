@@ -4,13 +4,16 @@
   "description": "Email OTP, JWT, and Socket.IO one-to-one chat demo.",
   "main": "backend/server.js",
   "scripts": {
-    "start": "node backend/server.js"
+    "start": "node backend/server.js",
+    "migrate:users": "node backend/migrate_users.js",
+    "test:google-config": "node backend/test_google_config.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^5.7.0",
     "resend": "^6.12.4",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "google-auth-library": "^8.8.0"
   }
 }
