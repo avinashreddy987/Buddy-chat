@@ -306,6 +306,9 @@ function renderUsers(users) {
     const mail = document.createElement("small");
     const presence = document.createElement("i");
 
+    // Ensure we always have a visible label to display/search
+    const display = (user.displayName && String(user.displayName).trim()) || user.email || 'User';
+
     button.type = "button";
     button.className = "user-button";
     button.dataset.email = user.email;
@@ -313,14 +316,14 @@ function renderUsers(users) {
     if (user.profilePicture) {
       const img = document.createElement('img');
       img.src = user.profilePicture;
-      img.alt = user.displayName;
+      img.alt = display;
       img.className = 'avatar-img';
       avatar.appendChild(img);
     } else {
-      avatar.textContent = getInitials(user.displayName);
+      avatar.textContent = getInitials(display);
     }
     copy.className = "user-copy";
-    name.textContent = user.displayName;
+    name.textContent = display;
     mail.textContent = user.email;
     presence.className = `presence ${user.online ? "online" : ""}`;
     presence.setAttribute("aria-label", user.online ? "Online" : "Offline");
@@ -407,6 +410,7 @@ function incrementLocalUnread(fromEmail) {
 async function loadUsers() {
   try {
     const data = await api("/api/users");
+    console.log('DEBUG /api/users response:', data.users);
     renderUsers(data.users);
   } catch (error) {
     chatError.textContent = error.message;
