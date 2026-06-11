@@ -11,8 +11,13 @@ const { Server } = require("socket.io");
 const { MongoClient } = require("mongodb");
 const { OAuth2Client } = require("google-auth-library");
 
+// Allowed frontend origins. Add your Vercel frontend URL here.
+// Use '*' to allow any origin (useful for testing but not recommended for production).
 const allowedOrigins = [
   "https://buddychat-self.vercel.app",
+  "https://buddy-chat-self.vercel.app",
+  "http://localhost:3000",
+  "*",
 ];
 
 const PORT = process.env.PORT || 3000;
@@ -788,8 +793,9 @@ const server = http.createServer((req, res) => {
 
   const origin = req.headers.origin;
 
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
+  if (allowedOrigins.includes("*") || (origin && allowedOrigins.includes(origin))) {
+    // If wildcard is allowed, echo the request origin or use '*'
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
   }
 
   res.setHeader(
@@ -819,7 +825,7 @@ const server = http.createServer((req, res) => {
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: allowedOrigins.includes("*") ? "*" : allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true,
   },

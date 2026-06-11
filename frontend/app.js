@@ -1,5 +1,7 @@
-const API_BASE_URL = "https://buddy-chat-gz4m.onrender.com";
-const authView = document.querySelector("#authView");
+const API_BASE_URL =
+  window.location.hostname === "localhost"
+    ? "http://localhost:3000"
+    : "https://buddy-chat-gz4m.onrender.com";const authView = document.querySelector("#authView");
 const chatView = document.querySelector("#chatView");
 const loginPanel = document.querySelector("#loginPanel");
 const registerPanel = document.querySelector("#registerPanel");
@@ -207,7 +209,7 @@ function stopUsersRefresh() {
 
 function connectSocket() {
   disconnectSocket();
-  socket = io("https://buddy-chat-gz4m.onrender.com", {
+socket = io(API_BASE_URL, {
     auth: { token },
     transports: ["websocket", "polling"],
   });
@@ -727,6 +729,8 @@ const pmEditBtn = document.getElementById('pmEditBtn');
 const pmCloseBtn = document.getElementById('pmCloseBtn');
 const viewProfileBtn = document.getElementById('viewProfileBtn');
 const editProfileBtn = document.getElementById('editProfileBtn');
+// Preserve original modal body so we can restore after editing
+const originalProfileModalBodyHTML = profileModal && profileModal.querySelector('.modal-body') ? profileModal.querySelector('.modal-body').innerHTML : '';
 
 function closeProfileModal() {
   profileModal.classList.add('hidden');
@@ -735,13 +739,40 @@ function closeProfileModal() {
 async function openProfileModal() {
   try {
     const data = await api('/api/me');
-    pmDisplayName.textContent = data.displayName || '';
-    pmEmail.textContent = data.email || '';
-    pmBio.textContent = data.bio || '';
-    pmJoined.textContent = data.joinedAt ? `Joined ${new Date(data.joinedAt).toLocaleDateString()}` : '';
-    pmLastSeen.textContent = data.lastSeen ? `Last: ${new Date(data.lastSeen).toLocaleString()}` : '';
-    if (data.profilePicture) pmAvatar.src = data.profilePicture;
-    else pmAvatar.src = '';
+    // Restore original modal content in case it was replaced by edit form
+    const panel = profileModal.querySelector('.modal-body');
+    if (originalProfileModalBodyHTML && panel) panel.innerHTML = originalProfileModalBodyHTML;
+
+    // Re-query elements inside restored panel
+    const pmAvatarEl = profileModal.querySelector('#pmAvatar');
+    const pmDisplayNameEl = profileModal.querySelector('#pmDisplayName');
+    const pmEmailEl = profileModal.querySelector('#pmEmail');
+    const pmBioEl = profileModal.querySelector('#pmBio');
+    const pmJoinedEl = profileModal.querySelector('#pmJoined');
+    const pmLastSeenEl = profileModal.querySelector('#pmLastSeen');
+    const pmEditBtnEl = profileModal.querySelector('#pmEditBtn');
+    const pmCloseBtnEl = profileModal.querySelector('#pmCloseBtn');
+
+    if (pmDisplayNameEl) pmDisplayNameEl.textContent = data.displayName || '';
+    if (pmEmailEl) pmEmailEl.textContent = data.email || '';
+    if (pmBioEl) pmBioEl.textContent = data.bio || '';
+    if (pmJoinedEl) pmJoinedEl.textContent = data.joinedAt ? `Joined ${new Date(data.joinedAt).toLocaleDateString()}` : '';
+    if (pmLastSeenEl) pmLastSeenEl.textContent = data.lastSeen ? `Last: ${new Date(data.lastSeen).toLocaleString()}` : '';
+    if (pmAvatarEl) {
+      if (data.profilePicture) pmAvatarEl.src = data.profilePicture;
+      else pmAvatarEl.src = '';
+    }
+
+    // Bind close and edit handlers for the restored elements
+    if (pmCloseBtnEl && !pmCloseBtnEl.dataset.bound) {
+      pmCloseBtnEl.addEventListener('click', () => { closeProfileModal(); showChat(); });
+      pmCloseBtnEl.dataset.bound = '1';
+    }
+    if (pmEditBtnEl && !pmEditBtnEl.dataset.bound) {
+      pmEditBtnEl.addEventListener('click', openProfileEdit);
+      pmEditBtnEl.dataset.bound = '1';
+    }
+
     profileModal.classList.remove('hidden');
   } catch (err) {
     console.error('Failed to load profile', err);
@@ -760,75 +791,76 @@ if (viewProfileBtn) {
 if (pmCloseBtn) pmCloseBtn.addEventListener('click', () => { closeProfileModal(); showChat(); });
 
 // Edit profile inside modal
-if (pmEditBtn) {
-  pmEditBtn.addEventListener('click', async () => {
-    // build an inline form
-    try {
-      const me = await api('/api/me');
-        const form = document.createElement('form');
-        form.className = 'profile-edit-form';
-        const fldName = document.createElement('label');
-        fldName.textContent = 'Display name';
-        const inpName = document.createElement('input');
-        inpName.name = 'displayName';
-        inpName.required = true;
-        inpName.value = me.displayName || '';
-        fldName.appendChild(inpName);
+async function openProfileEdit() {
+  // build an inline form
+  try {
+    const me = await api('/api/me');
+    const form = document.createElement('form');
+    form.className = 'profile-edit-form';
+    const fldName = document.createElement('label');
+    fldName.textContent = 'Display name';
+    const inpName = document.createElement('input');
+    inpName.name = 'displayName';
+    inpName.required = true;
+    inpName.value = me.displayName || '';
+    fldName.appendChild(inpName);
 
-        const fldBio = document.createElement('label');
-        fldBio.textContent = 'Bio';
-        const taBio = document.createElement('textarea');
-        taBio.name = 'bio';
-        taBio.value = me.bio || '';
-        fldBio.appendChild(taBio);
+    const fldBio = document.createElement('label');
+    fldBio.textContent = 'Bio';
+    const taBio = document.createElement('textarea');
+    taBio.name = 'bio';
+    taBio.value = me.bio || '';
+    fldBio.appendChild(taBio);
 
-        const fldAvatar = document.createElement('label');
-        fldAvatar.textContent = 'Avatar URL';
-        const inpAvatar = document.createElement('input');
-        inpAvatar.name = 'profilePicture';
-        inpAvatar.value = me.profilePicture || '';
-        fldAvatar.appendChild(inpAvatar);
+    const fldAvatar = document.createElement('label');
+    fldAvatar.textContent = 'Avatar URL';
+    const inpAvatar = document.createElement('input');
+    inpAvatar.name = 'profilePicture';
+    inpAvatar.value = me.profilePicture || '';
+    fldAvatar.appendChild(inpAvatar);
 
-        // theme selection removed
+    // theme selection removed
 
-        const actions = document.createElement('div'); actions.className = 'form-actions';
-        const saveBtn = document.createElement('button'); saveBtn.type = 'submit'; saveBtn.textContent = 'Save';
-        const cancelBtn = document.createElement('button'); cancelBtn.type = 'button'; cancelBtn.className = 'cancel'; cancelBtn.textContent = 'Cancel';
-        actions.append(saveBtn, cancelBtn);
+    const actions = document.createElement('div'); actions.className = 'form-actions';
+    const saveBtn = document.createElement('button'); saveBtn.type = 'submit'; saveBtn.textContent = 'Save';
+    const cancelBtn = document.createElement('button'); cancelBtn.type = 'button'; cancelBtn.className = 'cancel'; cancelBtn.textContent = 'Cancel';
+    actions.append(saveBtn, cancelBtn);
 
-        form.append(fldName, fldBio, fldAvatar, actions);
-        const panel = profileModal.querySelector('.modal-body');
-        panel.innerHTML = '';
-        panel.appendChild(form);
-        cancelBtn.addEventListener('click', () => { closeProfileModal(); showChat(); });
-        form.addEventListener('submit', async (ev) => {
-          ev.preventDefault();
-          const body = {
-            displayName: inpName.value,
-            bio: taBio.value,
-            profilePicture: inpAvatar.value
-          };
-          try {
-            const data = await api('/api/me/update', { method: 'POST', body: JSON.stringify(body) });
-            storeSession({ token: data.token, email: data.email, displayName: data.displayName, profilePicture: data.profilePicture });
-            displayName = data.displayName;
-            if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
-            // close modal and return to chat (home)
-            closeProfileModal();
-            showChat();
-          } catch (err) {
-            alert('Failed to save: ' + err.message);
-          }
-        });
-    } catch (err) {
-      alert('Failed to load profile for edit');
-    }
-  });
+    form.append(fldName, fldBio, fldAvatar, actions);
+    const panel = profileModal.querySelector('.modal-body');
+    panel.innerHTML = '';
+    panel.appendChild(form);
+    cancelBtn.addEventListener('click', () => { closeProfileModal(); showChat(); });
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const body = {
+        displayName: inpName.value,
+        bio: taBio.value,
+        profilePicture: inpAvatar.value
+      };
+      try {
+        const data = await api('/api/me/update', { method: 'POST', body: JSON.stringify(body) });
+        storeSession({ token: data.token, email: data.email, displayName: data.displayName, profilePicture: data.profilePicture });
+        displayName = data.displayName;
+        if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
+        // close modal and return to chat (home)
+        closeProfileModal();
+        showChat();
+      } catch (err) {
+        alert('Failed to save: ' + err.message);
+      }
+    });
+  } catch (err) {
+    alert('Failed to load profile for edit');
+  }
 }
+
+// Bind initial pmEditBtn to the edit function if present
+if (pmEditBtn) pmEditBtn.addEventListener('click', openProfileEdit);
 
 // also bind the menu-level edit button to open the modal in edit mode
 if (editProfileBtn) {
-  editProfileBtn.addEventListener('click', (e) => { e.preventDefault(); profileMenu.classList.add('hidden'); pmEditBtn.click(); });
+  editProfileBtn.addEventListener('click', (e) => { e.preventDefault(); profileMenu.classList.add('hidden'); const btn = document.getElementById('pmEditBtn'); if (btn) btn.click(); });
 }
 
 // Defensive binding: ensure profile menu actions are attached when menu is opened
@@ -844,7 +876,7 @@ function bindProfileMenuActions() {
       ev.preventDefault();
       profileMenu.classList.add('hidden');
       // open modal first, then enter edit mode
-      openProfileModal().then(() => setTimeout(() => pmEditBtn && pmEditBtn.click(), 60));
+      openProfileModal().then(() => setTimeout(() => { const btn = document.getElementById('pmEditBtn'); if (btn) btn.click(); }, 60));
     });
     ebtn.dataset.bound = '1';
   }
@@ -950,6 +982,18 @@ async function initGoogleSignIn() {
 }
 
 initGoogleSignIn();
+
+// Trigger animated 3D entrance for the brand title and tagline
+setTimeout(() => {
+  try {
+    const title = document.querySelector('.brand-title');
+    const tag = document.querySelector('.brand-tag');
+    if (title) title.classList.add('animate');
+    if (tag) tag.classList.add('animate');
+  } catch (e) {
+    // ignore
+  }
+}, 160);
 
 // Handle profile details submission
 profileDetailsForm.addEventListener("submit", async (e) => {
