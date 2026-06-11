@@ -116,6 +116,35 @@ let usersTimer = null;
 let pendingEmail = "";
 let verificationToken = "";
 let usersCache = [];
+// Parse JWT payload without verifying signature to inspect expiry locally
+function parseJwtPayload(t) {
+  try {
+    if (!t) return null;
+    const part = t.split('.')[1];
+    if (!part) return null;
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(json);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function fetchWithStatus(url, opts = {}) {
+  try {
+    const controller = new AbortController();
+    const timeout = opts.timeout || 7000;
+    const id = setTimeout(() => controller.abort(), timeout);
+    const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+    const res = await fetch(url, { ...opts, headers, signal: controller.signal });
+    clearTimeout(id);
+    let data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    // Network error or timeout
+    return { ok: false, status: 0, error: err };
+  }
+}
 const profileDetailsView = document.querySelector("#profileDetailsView");
 const profileDetailsForm = document.querySelector("#profileDetailsForm");
 const pdDisplayName = document.querySelector("#pdDisplayName");
@@ -958,24 +987,63 @@ if (logoMark) {
   logoMark.addEventListener('click', () => { if (sidebarEl) sidebarEl.classList.toggle('open'); });
 }
 
-if (token && email) {
-  api("/api/me")
-    .then((data) => {
-      email = data.email;
-      displayName = data.displayName;
-      localStorage.setItem("chatEmail", email);
-      localStorage.setItem("chatDisplayName", displayName);
-      // Only prompt for profile details if displayName is missing
+// Initialize session restore without treating transient network/server errors as auth failures.
+(async function initSession() {
+  console.log('[INIT] starting session restore', { tokenPresent: !!token, email });
+
+  if (!token || !email) {
+    console.log('[INIT] no token or email in localStorage — showing auth');
+    showAuth();
+    return;
+  }
+
+  const payload = parseJwtPayload(token);
+  console.log('[INIT] token payload', payload);
+
+  if (payload && payload.exp && payload.exp * 1000 < Date.now()) {
+    console.warn('[INIT] token expired locally — clearing session');
+    showAuth();
+    return;
+  }
+
+  // Attempt to validate token with server, but treat network/server errors as transient.
+  try {
+    const res = await fetchWithStatus(`${API_BASE_URL}/api/me`, { headers: { Authorization: `Bearer ${token}` }, timeout: 7000 });
+    console.log('[INIT] /api/me response status=', res.status);
+
+    if (res.ok && res.data) {
+      email = res.data.email;
+      displayName = res.data.displayName;
+      localStorage.setItem('chatEmail', email);
+      localStorage.setItem('chatDisplayName', displayName);
       if (displayName && String(displayName).trim()) {
         showChat();
       } else {
-        showProfileDetails(displayName || "");
+        showProfileDetails(displayName || '');
       }
-    })
-    .catch(showAuth);
-} else {
-  showAuth();
-}
+      return;
+    }
+
+    if (res.status === 401) {
+      console.warn('[INIT] /api/me returned 401 — clearing session');
+      showAuth();
+      return;
+    }
+
+    // Non-auth errors (network timeout, 5xx, 0) — keep user signed in and treat as transient
+    console.warn('[INIT] /api/me returned non-auth status — treating as transient', res.status, res.error || res.data);
+    // Populate displayName/email from token or localStorage if possible
+    if (!displayName && payload && payload.name) displayName = payload.name;
+    if (!email && payload && payload.email) email = payload.email;
+    showChat();
+  } catch (err) {
+    console.warn('[INIT] unexpected error while calling /api/me — treating as transient', err);
+    // Network failure or other unexpected error — keep user signed in
+    if (!displayName && payload && payload.name) displayName = payload.name;
+    if (!email && payload && payload.email) email = payload.email;
+    showChat();
+  }
+})();
 
 // Initialize Google Sign-In button (if configured)
 async function initGoogleSignIn() {
