@@ -215,7 +215,7 @@ async function sendOtpEmail(email, otp) {
     console.log("Sending OTP via Resend...");
     console.log("RESEND KEY EXISTS:", !!process.env.RESEND_API_KEY);
     const result = await resend.emails.send({
-      from: "onboarding@resend.dev",
+      from: "onboarding@sumukesh.app",
       to: email,
       subject: "Your Chat Verification Code",
       html: `
