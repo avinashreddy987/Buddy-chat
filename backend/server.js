@@ -10,6 +10,7 @@ const { Resend } = require("resend");
 const { Server } = require("socket.io");
 const { MongoClient } = require("mongodb");
 const { OAuth2Client } = require("google-auth-library");
+const bcrypt = require('bcryptjs');
 
 // Allowed frontend origins. Add your Vercel frontend URL here.
 // Use '*' to allow any origin (useful for testing but not recommended for production).
@@ -134,18 +135,44 @@ function hashSecret(secret, salt) {
 }
 
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  return { salt, hash: hashSecret(password, salt) };
-}
-
-function safeEqualHex(left, right) {
-  const leftBuffer = Buffer.from(left, "hex");
-  const rightBuffer = Buffer.from(right, "hex");
-  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  // bcrypt handles salting internally. We still return a salt field for
+  // compatibility with older records (set to an empty string when using bcrypt).
+  const salt = bcrypt.genSaltSync(10);
+  const hash = bcrypt.hashSync(password, salt);
+  return { salt, hash };
 }
 
 function verifyPassword(password, user) {
-  return safeEqualHex(hashSecret(password, user.passwordSalt), user.passwordHash);
+  try {
+    if (!user || !user.passwordHash) return false;
+    return bcrypt.compareSync(password, user.passwordHash);
+  } catch (err) {
+    return false;
+  }
+}
+
+function safeEqualHex(left, right) {
+  try {
+    const leftBuffer = Buffer.from(left, "hex");
+    const rightBuffer = Buffer.from(right, "hex");
+    return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Backwards compatibility: support legacy scrypt-based hashes stored as hex.
+function verifyPasswordWithFallback(password, user) {
+  // First try bcrypt (new users)
+  if (verifyPassword(password, user)) return true;
+  // If bcrypt failed, try legacy scrypt hash when salt exists
+  try {
+    if (user && user.passwordSalt && user.passwordHash) {
+      const candidate = hashSecret(password, user.passwordSalt);
+      if (safeEqualHex(candidate, user.passwordHash)) return true;
+    }
+  } catch (e) {}
+  return false;
 }
 
 function generateOtp() {
@@ -323,6 +350,7 @@ function createMessage({ sender, toEmail, text }) {
 async function handleRegisterRequest(req, res) {
   const body = await readBody(req);
   const email = normalizeEmail(body.email);
+  console.log('[OTP REQUEST] email=', email);
 
   if (!isValidEmail(email)) {
     return sendJson(res, 400, { error: "Enter a valid email address." });
@@ -376,6 +404,7 @@ async function handleVerifyOtp(req, res) {
   const body = await readBody(req);
   const email = normalizeEmail(body.email);
   const otp = String(body.otp || "").trim();
+  console.log('[OTP VERIFY] email=', email, 'otp=', otp);
   const pending = pendingOtps.get(email);
 
   if (!pending) {
@@ -404,6 +433,7 @@ async function handleVerifyOtp(req, res) {
     email,
     expiresAt: Date.now() + VERIFIED_TTL_MS,
   });
+  console.log('[OTP VERIFY] success, verificationToken=', verificationToken);
 
   return sendJson(res, 200, { verificationToken });
 }
@@ -416,7 +446,7 @@ async function handlePasswordSendOtp(req, res) {
   const body = await readBody(req);
   const current = String(body.currentPassword || "");
 
-  if (!verifyPassword(current, session.user)) {
+  if (!verifyPasswordWithFallback(current, session.user)) {
     return sendJson(res, 401, { error: "Current password is incorrect." });
   }
 
@@ -530,6 +560,7 @@ async function handleCompleteRegistration(req, res) {
   const body = await readBody(req);
   const verificationToken = String(body.verificationToken || "");
   const password = String(body.password || "");
+  console.log('[REGISTER COMPLETE] token=', verificationToken);
   const verified = verifiedRegistrations.get(verificationToken);
 
   if (!verified || Date.now() > verified.expiresAt) {
@@ -562,6 +593,7 @@ async function handleCompleteRegistration(req, res) {
   // persist new user
   saveUserToDb(users.get(verified.email)).catch(() => {});
   verifiedRegistrations.delete(verificationToken);
+  console.log('[REGISTER COMPLETE] user created=', verified.email);
 
   return sendJson(res, 201, { ok: true, email: verified.email });
 }
@@ -570,15 +602,17 @@ async function handleLogin(req, res) {
   const body = await readBody(req);
   const email = normalizeEmail(body.email);
   const password = String(body.password || "");
+  console.log('[LOGIN ATTEMPT] email=', email);
   const user = users.get(email);
 
-  if (!user || !verifyPassword(password, user)) {
+  if (!user || !verifyPasswordWithFallback(password, user)) {
     return sendJson(res, 401, { error: "Invalid email or password." });
   }
 
   user.lastSeen = Date.now();
   // persist updated lastSeen
   saveUserToDb(user).catch(() => {});
+  console.log('[LOGIN SUCCESS] email=', user.email);
   return sendJson(res, 200, {
     token: createJwt(user),
     email: user.email,

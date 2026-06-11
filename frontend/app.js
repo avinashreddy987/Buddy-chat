@@ -437,6 +437,7 @@ async function loadMessages() {
 }
 
 async function requestOtp(emailAddress) {
+  console.log('[FRONTEND] OTP request for', emailAddress);
   const data = await api("/api/register/request-otp", {
     method: "POST",
     body: JSON.stringify({ email: emailAddress }),
@@ -480,14 +481,14 @@ resendOtpButton.addEventListener("click", async () => {
 otpForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearAuthMessages();
-      // ensure modal is visible when editing
-      profileModal.classList.remove('hidden');
+  console.log('[FRONTEND] verify OTP for', pendingEmail, otpInput.value);
 
   try {
     const data = await api("/api/register/verify-otp", {
       method: "POST",
       body: JSON.stringify({ email: pendingEmail, otp: otpInput.value }),
     });
+    console.log('[FRONTEND] verify-otp response', data);
     verificationToken = data.verificationToken;
     setRegisterStep("password");
     registerMessage.textContent = "Email verified. Create your password.";
@@ -507,6 +508,7 @@ passwordForm.addEventListener("submit", async (event) => {
   }
 
   try {
+    console.log('[FRONTEND] completing registration with token', verificationToken);
     await api("/api/register/complete", {
       method: "POST",
       body: JSON.stringify({
@@ -514,13 +516,14 @@ passwordForm.addEventListener("submit", async (event) => {
         password: passwordInput.value,
       }),
     });
+    console.log('[FRONTEND] registration complete for', pendingEmail);
 
     loginEmailInput.value = pendingEmail;
     loginPasswordInput.value = "";
     passwordInput.value = "";
     confirmPasswordInput.value = "";
     setAuthMode("login");
-    loginMessage.textContent = "Account created. Login with your email and password.";
+    loginMessage.textContent = "Account created successfully. Please log in.";
   } catch (error) {
     registerError.textContent = error.message;
   }
@@ -530,6 +533,7 @@ loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearAuthMessages();
 
+  console.log('[FRONTEND] login attempt for', loginEmailInput.value);
   try {
     const data = await api("/api/login", {
       method: "POST",
@@ -538,11 +542,13 @@ loginForm.addEventListener("submit", async (event) => {
         password: loginPasswordInput.value,
       }),
     });
+    console.log('[FRONTEND] login success', data.email);
     storeSession(data);
     loginPasswordInput.value = "";
     // After login, prompt for profile details before entering chat
     showProfileDetails(data.displayName || "");
   } catch (error) {
+    console.error('[FRONTEND] login failed', error.message);
     loginError.textContent = error.message;
   }
 });
