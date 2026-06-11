@@ -1,7 +1,48 @@
 const API_BASE_URL =
   window.location.hostname === "localhost"
     ? "http://localhost:3000"
-    : "https://buddy-chat-gz4m.onrender.com";const authView = document.querySelector("#authView");
+    : "https://buddy-chat-gz4m.onrender.com";
+
+// Dynamically load the Socket.IO client if it's not already available.
+function loadScript(src, timeout = 7000) {
+  return new Promise((resolve, reject) => {
+    // Avoid adding duplicate tags
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = (e) => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(s);
+    setTimeout(() => reject(new Error(`Timeout loading ${src}`)), timeout);
+  });
+}
+
+async function loadSocketClientIfNeeded() {
+  if (typeof io !== "undefined") return true;
+
+  // Try to load the client from the backend first (served by socket.io server)
+  try {
+    const backendClient = `${API_BASE_URL.replace(/\/$/, "")}/socket.io/socket.io.js`;
+    await loadScript(backendClient, 6000);
+    if (typeof io !== "undefined") return true;
+  } catch (err) {
+    console.warn("Backend socket.io client load failed:", err && err.message);
+  }
+
+  // Fallback to CDN
+  try {
+    const cdn = "https://cdn.socket.io/4.7.5/socket.io.min.js";
+    await loadScript(cdn, 6000);
+    if (typeof io !== "undefined") return true;
+  } catch (err) {
+    console.error("CDN socket.io client load failed:", err && err.message);
+  }
+
+  return false;
+}
+
+const authView = document.querySelector("#authView");
 const chatView = document.querySelector("#chatView");
 const loginPanel = document.querySelector("#loginPanel");
 const registerPanel = document.querySelector("#registerPanel");
@@ -207,34 +248,53 @@ function stopUsersRefresh() {
   clearInterval(usersTimer);
 }
 
-function connectSocket() {
-  disconnectSocket();
-socket = io(API_BASE_URL, {
-    auth: { token },
-    transports: ["websocket", "polling"],
-  });
+async function connectSocket() {
+  try {
+    disconnectSocket();
 
-  socket.on("connect", () => {
-    chatError.textContent = "";
-    loadUsers();
-  });
-
-  socket.on("connect_error", (error) => {
-    chatError.textContent = error.message || "Socket connection failed.";
-  });
-
-  socket.on("users:update", loadUsers);
-  socket.on("private:message", handleSocketMessage);
-  socket.on("typing", (payload) => {
-    if (!payload || !payload.from) return;
-    // show typing only when from selected user
-    if (selectedUser && payload.from === selectedUser.email) {
-      chatStatus.textContent = "Typing...";
-      setTimeout(() => {
-        chatStatus.textContent = selectedUser.online ? "Online" : "Offline";
-      }, 1800);
+    const loaded = await loadSocketClientIfNeeded();
+    if (!loaded || typeof io === "undefined") {
+      console.error("Socket.IO client failed to load; socket disabled.");
+      // Do not clear session or call showAuth(); allow the app to continue offline.
+      return;
     }
-  });
+
+    try {
+      socket = io(API_BASE_URL, {
+        auth: { token },
+        transports: ["websocket", "polling"],
+      });
+    } catch (err) {
+      console.error("Failed to create socket:", err && err.message);
+      return;
+    }
+
+    socket.on("connect", () => {
+      chatError.textContent = "";
+      loadUsers();
+    });
+
+    socket.on("connect_error", (error) => {
+      chatError.textContent = error && error.message ? error.message : "Socket connection failed.";
+      console.warn('Socket connect_error', error);
+      // Do not log the user out on socket errors.
+    });
+
+    socket.on("users:update", loadUsers);
+    socket.on("private:message", handleSocketMessage);
+    socket.on("typing", (payload) => {
+      if (!payload || !payload.from) return;
+      // show typing only when from selected user
+      if (selectedUser && payload.from === selectedUser.email) {
+        chatStatus.textContent = "Typing...";
+        setTimeout(() => {
+          chatStatus.textContent = selectedUser.online ? "Online" : "Offline";
+        }, 1800);
+      }
+    });
+  } catch (err) {
+    console.error("connectSocket unexpected error:", err && err.message);
+  }
 }
 
 function disconnectSocket() {
