@@ -9,11 +9,12 @@
     "test:google-config": "node backend/test_google_config.js"
   },
   "dependencies": {
+    "cors": "^2.8.6",
     "dotenv": "^16.4.7",
+    "google-auth-library": "^8.8.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^5.7.0",
     "resend": "^6.12.4",
-    "socket.io": "^4.8.1",
-    "google-auth-library": "^8.8.0"
+    "socket.io": "^4.8.1"
   }
 }

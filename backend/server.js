@@ -11,6 +11,10 @@ const { Server } = require("socket.io");
 const { MongoClient } = require("mongodb");
 const { OAuth2Client } = require("google-auth-library");
 
+const allowedOrigins = [
+  "https://buddychat-self.vercel.app",
+];
+
 const PORT = process.env.PORT || 3000;
 const FRONTEND_DIR = path.resolve(__dirname, "..", "frontend");
 const JWT_SECRET = process.env.JWT_SECRET || "local-development-secret-change-this";
@@ -781,15 +785,45 @@ function serveStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
+
+  const origin = req.headers.origin;
+
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    return res.end();
+  }
+
   if (req.url.startsWith("/api/")) {
-    handleApi(req, res).catch((error) => sendJson(res, 400, { error: error.message }));
+    handleApi(req, res).catch((error) =>
+      sendJson(res, 400, { error: error.message })
+    );
     return;
   }
 
   serveStatic(req, res);
 });
 
-const io = new Server(server);
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
 
 function broadcastUsersUpdate() {
   io.emit("users:update");

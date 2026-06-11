@@ -1,3 +1,4 @@
+const API_BASE_URL = "https://buddy-chat-gz4m.onrender.com";
 const authView = document.querySelector("#authView");
 const chatView = document.querySelector("#chatView");
 const loginPanel = document.querySelector("#loginPanel");
@@ -80,7 +81,7 @@ const pdMessage = document.querySelector("#pdMessage");
 const pdError = document.querySelector("#pdError");
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -206,8 +207,9 @@ function stopUsersRefresh() {
 
 function connectSocket() {
   disconnectSocket();
-  socket = io({
+  socket = io("https://buddy-chat-gz4m.onrender.com", {
     auth: { token },
+    transports: ["websocket", "polling"],
   });
 
   socket.on("connect", () => {
@@ -876,7 +878,8 @@ if (token && email) {
 // Initialize Google Sign-In button (if configured)
 async function initGoogleSignIn() {
   try {
-    const cfg = await fetch('/api/config').then((r) => r.json());
+    const cfg = await fetch(`${API_BASE_URL}/api/config`)
+      .then((r) => r.json());
     const clientId = cfg.googleClientId || "";
     const container = document.getElementById('googleSignIn');
     // Always render a visible button so users see the option.
