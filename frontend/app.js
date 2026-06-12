@@ -3,6 +3,9 @@ const API_BASE_URL =
     ? "http://localhost:3000"
     : "https://buddy-chat-gz4m.onrender.com";
 
+// Diagnostic: expose which API base the frontend selected (helps verify Vercel uses Render)
+console.log('API_BASE_URL=', API_BASE_URL);
+
 // Dynamically load the Socket.IO client if it's not already available.
 function loadScript(src, timeout = 7000) {
   return new Promise((resolve, reject) => {
@@ -163,7 +166,15 @@ async function api(path, options = {}) {
   });
 
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Something went wrong.");
+
+  console.log("API URL:", `${API_BASE_URL}${path}`);
+  console.log("STATUS:", response.status);
+  console.log("RESPONSE:", JSON.stringify(data, null, 2));
+
+  if (!response.ok) {
+    throw new Error(data.error || "Something went wrong.");
+  }
+
   return data;
 }
 
@@ -396,6 +407,7 @@ function renderUsers(users) {
     const name = document.createElement("strong");
     const mail = document.createElement("small");
     const presence = document.createElement("i");
+    const last = document.createElement("small");
 
     // Ensure we always have a visible label to display/search
     const display = (user.displayName && String(user.displayName).trim()) || user.email || 'User';
@@ -416,10 +428,14 @@ function renderUsers(users) {
     copy.className = "user-copy";
     name.textContent = display;
     mail.textContent = user.email;
-    presence.className = `presence ${user.online ? "online" : ""}`;
+    presence.className = `presence ${user.online ? "online" : "offline"}`;
     presence.setAttribute("aria-label", user.online ? "Online" : "Offline");
+    // last seen text
+    last.className = 'last-seen';
+    if (user.online) last.textContent = 'Online';
+    else last.textContent = formatLastSeen(user.lastSeen);
 
-    copy.append(name, mail);
+    copy.append(name, mail, last);
     // unread badge
     const unread = document.createElement('span');
     unread.className = 'unread';
@@ -474,6 +490,24 @@ function isSelectedConversation(message) {
     ((message.fromEmail === email && message.toEmail === selectedUser.email) ||
       (message.toEmail === email && message.fromEmail === selectedUser.email))
   );
+}
+
+function formatLastSeen(ts) {
+  try {
+    if (!ts) return '';
+    const when = Number(ts) || 0;
+    const diff = Date.now() - when;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (seconds < 60) return 'Last seen just now';
+    if (minutes < 60) return `Last seen ${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+    if (hours < 24) return `Last seen ${hours} hour${hours === 1 ? '' : 's'} ago`;
+    if (days === 1) return 'Last seen yesterday';
+    return `Last seen ${days} days ago`;
+  } catch (e) { return ''; }
 }
 
 function handleSocketMessage(message) {

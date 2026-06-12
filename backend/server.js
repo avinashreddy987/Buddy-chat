@@ -54,8 +54,17 @@ async function initDb() {
     await client.connect();
     db = client.db(MONGODB_DB);
     usersCollection = db.collection("users");
+    // Log some diagnostics about the MongoDB connection (mask credentials)
+    try {
+      const masked = (MONGODB_URI || '').replace(/:(?:\\\/\\\/)?([^@]+)@/, ':***@');
+      console.log('MONGODB_URI (masked):', masked || '(not set)');
+    } catch (e) {}
 
     const all = await usersCollection.find({}).toArray();
+    try {
+      const count = await usersCollection.countDocuments();
+      console.log(`Users in MongoDB collection: ${count}`);
+    } catch (e) {}
     for (const u of all) {
       users.set(u.email, {
         email: u.email,
@@ -72,7 +81,7 @@ async function initDb() {
         unread: u.unread || {},
       });
     }
-    console.log(`Loaded ${all.length} users from MongoDB`);
+    console.log(`Loaded ${all.length} users from MongoDB into memory. users Map size=${users.size}`);
   } catch (err) {
     console.warn("Could not connect to MongoDB, falling back to in-memory store:", err.message || err);
   }
@@ -124,6 +133,8 @@ function normalizeEmail(email) {
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
 }
+
+console.log("✅ isValidEmail loaded successfully");
 
 function getDisplayName(email) {
   const localPart = email.split("@")[0] || "User";
@@ -348,30 +359,37 @@ function createMessage({ sender, toEmail, text }) {
 }
 
 async function handleRegisterRequest(req, res) {
-  const body = await readBody(req);
-  const email = normalizeEmail(body.email);
-  console.log('[OTP REQUEST] email=', email);
+  try {
+    const body = await readBody(req);
+    const email = normalizeEmail(body.email);
+    console.log('[OTP REQUEST] email=', email);
+      console.log("RAW EMAIL:", body.email);
+      console.log("NORMALIZED EMAIL:", email);
+      console.log("typeof isValidEmail =", typeof isValidEmail);
 
-  if (!isValidEmail(email)) {
-    return sendJson(res, 400, { error: "Enter a valid email address." });
-  }
+    const emailValid = (typeof isValidEmail === 'function')
+      ? isValidEmail(email)
+      : (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254);
+    if (!emailValid) {
+      return sendJson(res, 400, { error: "Enter a valid email address." });
+    }
 
-  if (users.has(email)) {
-    return sendJson(res, 409, { error: "An account already exists for this email." });
-  }
+    if (users.has(email)) {
+      return sendJson(res, 409, { error: "An account already exists for this email." });
+    }
 
-  const otp = generateOtp();
-  const otpSalt = crypto.randomBytes(16).toString("hex");
-  // Persist the OTP info first so the API can return quickly.
-  pendingOtps.set(email, {
-    otpHash: hashOtp(email, otp, otpSalt),
-    otpSalt,
-    attempts: 0,
-    expiresAt: Date.now() + OTP_TTL_MS,
-    emailSent: false,
-    sentAt: null,
-    emailError: null,
-  });
+    const otp = generateOtp();
+    const otpSalt = crypto.randomBytes(16).toString("hex");
+    // Persist the OTP info first so the API can return quickly.
+    pendingOtps.set(email, {
+      otpHash: hashOtp(email, otp, otpSalt),
+      otpSalt,
+      attempts: 0,
+      expiresAt: Date.now() + OTP_TTL_MS,
+      emailSent: false,
+      sentAt: null,
+      emailError: null,
+    });
   // If the user is requesting an OTP for the same address used for SMTP
   // (common during testing) send synchronously and return delivery info so
   // the requester can see a preview or messageId immediately. Otherwise
@@ -397,9 +415,16 @@ async function handleRegisterRequest(req, res) {
     }
   })();
 
-  return sendJson(res, 200, { ok: true, email });
-}
+ return sendJson(res, 200, { ok: true, email });
+} catch (err) {
+  console.error("REGISTER ERROR:", err);
+  console.error("REGISTER STACK:", err?.stack);
 
+  return sendJson(res, 500, {
+    error: err?.message || "Internal server error"
+  });
+}
+}
 async function handleVerifyOtp(req, res) {
   const body = await readBody(req);
   const email = normalizeEmail(body.email);
@@ -848,6 +873,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.url.startsWith("/api/")) {
+    console.log(`[${new Date().toISOString()}] PID ${process.pid} incoming ${req.method} ${req.url}`);
     handleApi(req, res).catch((error) =>
       sendJson(res, 400, { error: error.message })
     );

@@ -64,7 +64,8 @@ input {
   min-width: 0;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
-  padding: 13px 14px;
+  padding: 16px 18px;
+  font-size: 16px;
   color: var(--ink);
   background: #ffffff;
   outline: none;
@@ -105,7 +106,7 @@ h2 {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 40px;
 }
 
 .hidden {
@@ -122,119 +123,179 @@ h2 {
 }
 
 .auth-shell {
-  width: min(1080px, 100%);
-  min-height: 650px;
+  width: min(14000px, 95vw);
+  min-height: 780px;
   display: grid;
-  grid-template-columns: 1.05fr 0.95fr;
+  grid-template-columns: 1fr 1fr;
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(216, 224, 234, 0.92);
-  border-radius: 8px;
+  border-radius: 24px;
   overflow: hidden;
   box-shadow: var(--shadow);
+  box-shadow: 0 20px 60px rgba(15,23,42,.08);
+}
+
+/* =========================
+   BUDDYCHAT AUTH SECTION
+========================= */
+
+body {
+  background: #f8fafc;
+}
+
+.auth-shell {
+  width: min(1250px, 95vw);
+  min-height: 760px;
+
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+
+  background: white;
+  border-radius: 24px;
+  overflow: hidden;
+
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
 }
 
 .auth-brand {
+  background:linear-gradient(
+    180deg,
+    #f8fbff 0%,
+    #edf5ff 100%
+  );
+  color: #0f172a;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 36px;
-  color: #ffffff;
-  background: linear-gradient(135deg, #0f9f8f 12%, #2458d3 60%);
+  padding: 60px;
 }
 
-.auth-brand .eyebrow {
-  color: rgba(255, 255, 255, 0.78);
+.hero-inner {
+  max-width: 650px;
+  width: 100%;
 }
 
-/* Login hero */
-.login-hero .hero-inner {
-  text-align: center;
+.buddy-logo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 40px;
 }
 
-.brand-title {
-  font-weight: 900;
-  font-size: clamp(2.5rem, 6vw, 5rem);
-  letter-spacing: 0.18rem;
-  margin: 0 0 8px;
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
-  text-transform: uppercase;
+.buddy-logo-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
 }
 
-.brand-tag {
-  margin: 0;
-  color: rgba(255,255,255,0.9);
+.buddy-logo-text {
+  font-size: 30px;
   font-weight: 700;
-  font-size: 1rem;
-  opacity: 0.95;
 }
 
-/* 3D entrance animation for brand title */
-.login-hero .hero-inner {
-  perspective: 1000px;
-  -webkit-perspective: 1000px;
+.buddy {
+  color: #0f172a;
 }
 
-.brand-title {
-  transform-style: preserve-3d;
-  -webkit-transform-style: preserve-3d;
+.chat {
+  color: #2563eb;
+}
+
+.hero-heading {
+  font-size: 52px;
+  line-height: 1.1;
+  font-weight: 800;
+  margin-bottom: 16px;
+}
+
+.hero-description {
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1.7;
+  margin-bottom: 40px;
+}
+
+.feature-list{
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+  margin-top:28px;
+}
+
+.feature-item{
+  display:flex;
+  gap:14px;
+  align-items:flex-start;
+}
+
+.feature-icon{
+  width:46px;
+  height:46px;
+  border-radius:12px;
+  background:#2563eb;
+  color:white;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:18px;
+}
+
+.feature-item strong{
+  display:block;
+  margin-bottom:4px;
+}
+
+.feature-item p{
+  margin:0;
+  color:#64748b;
+  font-size:14px;
+}
+
+
+.chat-preview {
+  margin-top: 20px;
+}
+
+.chat-card {
+  background:white;
+  border-radius:24px;
+  padding:28px;
+  margin-top:30px;
+  max-width:420px;
+  box-shadow:0 15px 40px rgba(15,23,42,.08);
+}
+
+.chat-user {
+  font-weight: 600;
+  margin-bottom: 18px;
+}
+
+.online-dot {
+  width: 10px;
+  height: 10px;
+  background: #22c55e;
+  border-radius: 50%;
   display: inline-block;
-  position: relative;
+  margin-right: 8px;
+}
+
+.chat-bubble {
+  background: #f1f5f9;
+  padding: 12px 16px;
+  border-radius: 14px;
+  margin-bottom: 12px;
+  width: fit-content;
+}
+
+.chat-bubble.mine {
+  background: #2563eb;
   color: white;
-  text-shadow: 0 6px 18px rgba(15,32,51,0.35), 0 2px 6px rgba(15,32,51,0.24);
-  transition: transform 320ms ease, text-shadow 320ms ease;
-}
-
-.brand-title.animate {
-  animation: brandIn 900ms cubic-bezier(.2,.9,.23,1) both;
-}
-
-.brand-tag.animate {
-  animation: tagIn 900ms cubic-bezier(.2,.9,.23,1) 160ms both;
-}
-
-@keyframes brandIn {
-  0% {
-    transform: translateY(28px) translateZ(-220px) rotateX(18deg) rotateY(-12deg) scale(0.96);
-    opacity: 0;
-    filter: blur(10px);
-    text-shadow: 0 18px 40px rgba(15,32,51,0.26);
-  }
-  60% {
-    transform: translateY(-6px) translateZ(40px) rotateX(4deg) rotateY(-4deg) scale(1.02);
-    opacity: 1;
-    filter: blur(0);
-    text-shadow: 0 8px 24px rgba(15,32,51,0.18);
-  }
-  100% {
-    transform: translateZ(0) rotateX(0) rotateY(0) scale(1);
-    opacity: 1;
-    filter: none;
-    text-shadow: 0 6px 18px rgba(15,32,51,0.12);
-  }
-}
-
-@keyframes tagIn {
-  0% { transform: translateY(10px) translateZ(-40px); opacity: 0; filter: blur(6px);} 
-  70% { transform: translateY(-4px) translateZ(8px); opacity: 1; filter: none; }
-  100% { transform: none; opacity: 1; }
-}
-
-/* subtle shine across title */
-.brand-title::after {
-  content: '';
-  position: absolute;
-  left: -30%;
-  top: 0;
-  width: 60%;
-  height: 100%;
-  transform: skewX(-18deg) translateZ(0);
-  background: linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.28), rgba(255,255,255,0.06));
-  opacity: 0;
-  pointer-events: none;
-}
-
-.brand-title.animate::after {
-  animation: shine 1.2s ease 260ms both;
+  margin-left: auto;
 }
 
 @keyframes shine {
@@ -258,11 +319,12 @@ h2 {
 }
 
 .auth-card {
-  display: grid;
-  align-content: start;
-  gap: 28px;
-  padding: 38px;
-  background: rgba(255, 255, 255, 0.94);
+  background: white;
+  padding: 60px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
 }
 
 /* Profile details view (pre-chat) */
@@ -281,12 +343,16 @@ h2 {
 }
 
 .auth-tabs {
+  width: 100%;
+  max-width: 550px;
+  margin: 0 auto 30px;
+
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 5px;
-  background: #eef2f7;
-  border-radius: 8px;
+  gap: 6px;
+  padding: 6px;
+  background: #f1f5f9;
+  border-radius: 14px;
 }
 
 .tab-button {
@@ -308,8 +374,11 @@ h2 {
 }
 
 .auth-panel {
-  display: grid;
-  gap: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 500px;
 }
 
 .panel-title {
@@ -319,7 +388,14 @@ h2 {
 
 .stacked-form {
   display: grid;
-  gap: 16px;
+  gap: 14px;
+}
+
+.stacked-form button {
+  height: 58px;
+  border-radius: 12px;
+  font-size: 17px;
+  font-weight: 700;
 }
 
 .form-actions {
@@ -702,7 +778,7 @@ h2 {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 6px 0 12px;
+  margin: 12px 0;
 }
 
 .or-separator::before,
@@ -722,21 +798,21 @@ h2 {
 }
 
 .google-signin {
-  display: flex;
-  justify-content: center;
+  width: 100%;
+  margin-top: 12px;
 }
 
 .google-btn {
-  display: inline-flex;
+  width: 100%;
+  height: 56px;
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
-  background: #fff;
-  color: #222;
-  border: 1px solid var(--line);
-  padding: 10px 14px;
-  border-radius: 8px;
-  font-weight: 800;
-  cursor: pointer;
+  background: rgb(120, 186, 131);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  font-weight: 600;
 }
 
 .google-btn img {
@@ -759,6 +835,12 @@ h2 {
 
 .user-copy small {
   color: var(--muted);
+}
+
+.last-seen {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 4px;
 }
 
 .presence {
@@ -1024,7 +1106,7 @@ h2 {
   }
 
   .auth-brand {
-    padding: 28px;
+    padding: 70px;
   }
 
   .auth-card {
