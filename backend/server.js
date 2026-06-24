@@ -1,3 +1,6 @@
+require("dotenv").config();
+console.log("MONGODB_URI =", process.env.MONGODB_URI);
+
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -47,13 +50,31 @@ const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017";
 const MONGODB_DB = process.env.MONGODB_DB || "chatbot";
 let db = null;
 let usersCollection = null;
+let messagesCollection = null;
 
+(async () => {
+  try {
+    const client = new MongoClient(process.env.MONGODB_URI);
+    await client.connect();
+    console.log("✅ ATLAS CONNECTION SUCCESS");
+    await client.close();
+  } catch (err) {
+    console.error("❌ ATLAS TEST FAILED:", err);
+  }
+})();
+ 
 async function initDb() {
   try {
     const client = new MongoClient(MONGODB_URI, { serverApi: { version: "1" } });
     await client.connect();
     db = client.db(MONGODB_DB);
     usersCollection = db.collection("users");
+    messagesCollection = db.collection("messages");
+
+    await messagesCollection.createIndex({
+      chat: 1,
+      createdAt: 1
+    });
     // Log some diagnostics about the MongoDB connection (mask credentials)
     try {
       const masked = (MONGODB_URI || '').replace(/:(?:\\\/\\\/)?([^@]+)@/, ':***@');
@@ -297,19 +318,16 @@ function getPublicUser(user) {
 }
 
 function getUsersFor(email) {
-  const requester = users.get(email);
   return [...users.values()]
     .filter((user) => user.email !== email)
-    .map((user) => {
-      const pu = getPublicUser(user);
-      try {
-        pu.unreadCount = (requester && requester.unread && Number(requester.unread[user.email]) ) || 0;
-      } catch (e) {
-        pu.unreadCount = 0;
-      }
-      return pu;
-    })
-    .sort((a, b) => Number(b.online) - Number(a.online) || b.lastSeen - a.lastSeen);
+    .map((user) => ({
+      email: user.email,
+      displayName: user.displayName || getDisplayName(user.email),
+      online: activeUsers.has(user.email),
+      profilePicture: user.profilePicture || null,
+      lastSeen: user.lastSeen || Date.now(),
+      unreadCount: user.unread?.[email] || 0,
+    }));
 }
 
 function createMessage({ sender, toEmail, text }) {
@@ -340,6 +358,10 @@ function createMessage({ sender, toEmail, text }) {
   };
 
   messages.push(message);
+
+  if (messagesCollection) {
+    messagesCollection.insertOne(message).catch(console.error);
+  }
 
   // increment unread counter for recipient
   try {
@@ -775,7 +797,18 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "GET" && req.url === "/api/users") {
-    return sendJson(res, 200, { users: getUsersFor(session.email) });
+
+    console.log(
+      "USERS SENT:",
+      getUsersFor(session.email).map(u => ({
+        email: u.email,
+        online: u.online
+      }))
+    );
+
+    return sendJson(res, 200, {
+      users: getUsersFor(session.email)
+    });
   }
 
   if (req.method === "POST" && req.url === "/api/unread/reset") {
@@ -801,7 +834,10 @@ async function handleApi(req, res) {
     }
 
     const key = conversationKey(session.email, withEmail);
-    const chat = messages.filter((message) => message.chat === key && message.id > after);
+    const chat = await messagesCollection
+      .find({ chat: key })
+      .sort({ createdAt: 1 })
+      .toArray();
     return sendJson(res, 200, { messages: chat });
   }
 

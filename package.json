@@ -9,13 +9,13 @@
     "test:google-config": "node backend/test_google_config.js"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.6",
-    "dotenv": "^16.4.7",
+    "dotenv": "^16.6.1",
     "google-auth-library": "^8.8.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^5.7.0",
     "resend": "^6.12.4",
-    "socket.io": "^4.8.1",
-    "bcryptjs": "^2.4.3"
+    "socket.io": "^4.8.1"
   }
 }
