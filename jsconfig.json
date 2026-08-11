@@ -5,8 +5,7 @@
     "checkJs": false,
     "allowJs": true,
     "moduleResolution": "node",
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0"
+    "baseUrl": "."
   },
   "exclude": ["node_modules", "**/node_modules/*"]
 }

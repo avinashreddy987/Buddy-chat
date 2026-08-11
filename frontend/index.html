@@ -3,12 +3,53 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>One-to-One Chat</title>
+    <meta name="description" content="BuddyChat — a secure, real-time private messaging platform for one-to-one conversations with your friends." />
+    <title>BuddyChat — Private Messaging</title>
+
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <!-- Animated Welcome Hero Landing Screen -->
+    <section id="welcomeLandingView" class="welcome-landing-shell">
+      <div class="welcome-hero-card">
+        <div class="welcome-logo-wrapper">
+          <div class="welcome-logo-badge">💬</div>
+          <h1 class="welcome-title">
+            <span class="buddy-gradient">Buddy</span><span class="chat-highlight">Chat</span>
+          </h1>
+        </div>
+
+        <h2 class="welcome-heading" aria-label="Welcome to BuddyChat">
+          <span>Welcome</span><span>to</span><span class="welcome-heading-brand">BuddyChat</span>
+        </h2>
+        <p class="welcome-subheading">
+          Connect seamlessly with friends through instant private messaging, custom voice notes, and rich chat wallpapers.
+        </p>
+
+        <div class="welcome-pills-row">
+          <div class="welcome-pill">🔒 Private & Secure</div>
+          <div class="welcome-pill">⚡ Real-time Speed</div>
+          <div class="welcome-pill">🎤 Voice Messages</div>
+        </div>
+
+        <div class="welcome-action-row">
+          <button id="welcomeStartBtn" class="welcome-start-btn" type="button">
+            <span class="button-word">Start</span>
+            <span class="button-word">Chatting</span>
+            <span class="arrow-icon">➔</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Floating particle elements -->
+      <div class="particle particle-1">💬</div>
+      <div class="particle particle-2">⚡</div>
+      <div class="particle particle-3">🔒</div>
+      <div class="particle particle-4">✨</div>
+    </section>
+
     <main class="app">
-      <section id="authView" class="auth-shell">
+      <section id="authView" class="auth-shell hidden">
         <aside class="auth-brand login-hero">
           <div class="hero-inner">
 
@@ -103,6 +144,9 @@
                 Password
                 <input id="loginPasswordInput" type="password" autocomplete="current-password" placeholder="Your password" required />
               </label>
+              <div class="auth-extra-row">
+                <button id="loginForgotPasswordBtn" type="button" class="text-link-btn">Forgot password?</button>
+              </div>
               <button type="submit">Login</button>
             </form>
             <p id="loginMessage" class="success" role="status"></p>
@@ -183,11 +227,14 @@
               </div>
             </div>
           </div>
-          <div class="section-heading">People</div>
+          <div class="section-heading">Recent Chats</div>
+          <div id="recentChatsList" class="users-list"></div>
+
+          <div class="section-heading">Search People</div>
           <div class="users-search">
-            <input id="usersSearchInput" type="search" placeholder="Search people by name or email" />
+            <input id="usersSearchInput" type="search" placeholder="Search people by name or email" autocomplete="off" />
           </div>
-          <div id="usersList" class="users-list"></div>
+          <div id="searchResultsList" class="users-list"></div>
         </aside>
 
         <section class="conversation">
@@ -197,6 +244,7 @@
               <h2 id="chatTitle">Choose a user</h2>
             </div>
             <span id="chatStatus" class="status-pill">Waiting</span>
+            <div id="typingIndicator" class="typing-indicator" aria-live="polite"></div>
             <div class="header-actions">
               <button id="profileButton" class="profile-btn" type="button" aria-haspopup="true" aria-expanded="false">
                 <span id="headerAvatar" class="avatar avatar-mini">U</span>
@@ -208,54 +256,81 @@
                   <small id="menuEmail"></small>
                 </div>
                 <div class="profile-menu-actions">
-                          <button id="viewProfileBtn" class="menu-item" type="button">View Profile</button>
-                          <button id="editProfileBtn" class="menu-item" type="button">Edit Profile</button>
-                          <button id="changePasswordBtn" class="menu-item" type="button">Change Password</button>
-                        
-                          <button id="menuLogoutBtn" class="menu-item" type="button">Logout</button>
+                  <button id="viewProfileBtn" class="menu-item" type="button">View Profile</button>
+                  <button id="openSettingsBtn" class="menu-item" type="button">Settings</button>
+                  <button id="changePasswordBtn" class="menu-item" type="button">Change Password</button>
+                  <button id="menuLogoutBtn" class="menu-item danger-item" type="button">Logout</button>
                 </div>
               </div>
             </div>
           </header>
 
           <div id="emptyState" class="empty-state">
-            <svg width="160" height="120" viewBox="0 0 160 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <rect x="8" y="16" width="144" height="88" rx="12" fill="#EAF6F3"/>
-              <circle cx="38" cy="48" r="16" fill="#CFEFE7"/>
-              <rect x="62" y="36" width="70" height="12" rx="6" fill="#DFF7F1"/>
-              <rect x="62" y="56" width="50" height="10" rx="5" fill="#DFF7F1"/>
+            <svg width="180" height="140" viewBox="0 0 180 140" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect x="10" y="20" width="160" height="100" rx="16" fill="url(#bg)"/>
+              <circle cx="44" cy="56" r="18" fill="url(#c1)"/>
+              <rect x="72" y="42" width="78" height="14" rx="7" fill="url(#r1)"/>
+              <rect x="72" y="64" width="56" height="11" rx="5.5" fill="url(#r2)"/>
+              <rect x="30" y="88" width="120" height="11" rx="5.5" fill="url(#r3)"/>
+              <defs>
+                <linearGradient id="bg" x1="10" y1="20" x2="170" y2="120" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#eef2ff"/>
+                  <stop offset="100%" stop-color="#ede9fe"/>
+                </linearGradient>
+                <linearGradient id="c1" x1="26" y1="38" x2="62" y2="74" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#a5b4fc"/>
+                  <stop offset="100%" stop-color="#c4b5fd"/>
+                </linearGradient>
+                <linearGradient id="r1" x1="72" y1="42" x2="150" y2="56" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#c7d2fe"/>
+                  <stop offset="100%" stop-color="#ddd6fe"/>
+                </linearGradient>
+                <linearGradient id="r2" x1="72" y1="64" x2="128" y2="75" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ddd6fe"/>
+                  <stop offset="100%" stop-color="#e0f2fe"/>
+                </linearGradient>
+                <linearGradient id="r3" x1="30" y1="88" x2="150" y2="99" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#e0e7ff"/>
+                  <stop offset="100%" stop-color="#ede9fe"/>
+                </linearGradient>
+              </defs>
             </svg>
-            <div style="margin-top:12px; font-weight:800;">Select a user to start chatting.</div>
-            <div style="color:var(--muted); margin-top:6px;">Open a profile on the left to begin a private conversation.</div>
+            <div style="margin-top:16px; font-weight:800; font-size:1.05rem; color:var(--ink);">Pick a conversation</div>
+            <div style="color:var(--muted); margin-top:8px; font-size:0.9rem; line-height:1.6;">Select someone from the sidebar to start a private, real-time conversation.</div>
           </div>
           <div id="messagesList" class="messages-list hidden"></div>
 
           <form id="messageForm" class="message-form">
+            <div class="emoji-picker-wrapper">
+              <button id="inputEmojiBtn" class="emoji-btn" type="button" title="Choose emoji">😊</button>
+              <div id="inputEmojiPicker" class="input-emoji-picker hidden"></div>
+            </div>
             <input id="messageInput" type="text" placeholder="Type a message" maxlength="1000" disabled />
-            <button id="sendButton" type="submit" disabled>Send</button>
+            <button id="recordBtn" class="record-btn" type="button" title="Record voice message">🎤</button>
+            <button id="sendButton" type="submit" title="Send message" disabled>➤</button>
           </form>
           <p id="chatError" class="error" role="alert"></p>
         </section>
       </section>
     </main>
 
-    <!-- Change Password Modal -->
+    <!-- Change / Reset Password Modal -->
     <div id="changePasswordModal" class="modal hidden" aria-hidden="true">
       <div class="modal-backdrop"></div>
       <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="changePasswordTitle">
         <header>
-          <h3 id="changePasswordTitle">Change Password</h3>
+          <h3 id="changePasswordTitle">Reset Password</h3>
           <button id="closeChangePassword" class="close-btn" type="button">×</button>
         </header>
         <div class="modal-body">
           <form id="changePasswordForm">
             <div id="cpStepCurrent">
               <label>
-                Current password
-                <input id="cpCurrentPassword" type="password" autocomplete="current-password" required />
+                Email Address
+                <input id="cpEmailInput" type="email" autocomplete="email" placeholder="you@example.com" required />
               </label>
-              <div class="form-actions">
-                <button id="cpSendOtpButton" type="button">Send OTP</button>
+              <div class="form-actions" style="margin-top:14px;">
+                <button id="cpSendOtpButton" type="button">Send Verification Code</button>
                 <button id="cpCancelBtn" class="ghost-button" type="button">Cancel</button>
               </div>
               <p id="cpStatus" class="success"></p>
@@ -263,26 +338,29 @@
             </div>
 
             <div id="cpStepOtp" class="hidden">
+              <div class="verified-email" style="margin-bottom:12px;">
+                <span>Verification code sent to email</span>
+              </div>
               <label>
-                Verification code
-                <input id="cpOtpInput" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+                Verification Code (6-digit)
+                <input id="cpOtpInput" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="Enter 6-digit code" />
               </label>
-              <div class="form-actions">
+              <div class="form-actions" style="margin-top:14px;">
                 <button id="cpVerifyOtpButton" type="button">Verify OTP</button>
-                <button id="cpResendOtpButton" class="ghost-button" type="button">Resend</button>
+                <button id="cpResendOtpButton" class="ghost-button" type="button">Resend Code</button>
               </div>
             </div>
 
             <div id="cpStepNew" class="hidden">
               <label>
-                New password
-                <input id="cpNewPassword" type="password" autocomplete="new-password" required />
+                New Password
+                <input id="cpNewPassword" type="password" autocomplete="new-password" placeholder="At least 8 characters" required />
               </label>
-              <label>
-                Confirm password
-                <input id="cpConfirmNewPassword" type="password" autocomplete="new-password" required />
+              <label style="margin-top:10px;">
+                Confirm New Password
+                <input id="cpConfirmNewPassword" type="password" autocomplete="new-password" placeholder="Re-enter new password" required />
               </label>
-              <div class="form-actions">
+              <div class="form-actions" style="margin-top:14px;">
                 <button id="cpUpdateButton" type="button">Update Password</button>
               </div>
             </div>
@@ -291,36 +369,164 @@
       </div>
     </div>
 
-    <!-- Profile Modal -->
-    <div id="profileModal" class="modal hidden" aria-hidden="true">
+    <!-- Settings Modal (Tabbed Layout) -->
+    <div id="settingsModal" class="modal hidden" aria-hidden="true">
       <div class="modal-backdrop"></div>
-      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
-        <header>
-          <h3 id="profileTitle">Profile</h3>
-          <button id="closeProfileModal" class="close-btn" type="button">×</button>
+      <div class="modal-panel settings-modal-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <header class="settings-modal-header">
+          <h3 id="settingsTitle">Settings</h3>
+          <button id="closeSettings" class="close-btn" type="button">×</button>
         </header>
-        <div class="modal-body profile-card">
-          <div class="profile-grid">
-            <div class="profile-avatar">
-              <img id="pmAvatar" src="" alt="avatar" />
-            </div>
-            <div class="profile-info">
-              <h4 id="pmDisplayName"></h4>
-              <p id="pmEmail"></p>
-              <p id="pmBio" class="muted"></p>
-              <div class="profile-meta">
-                <span id="pmJoined"></span>
-                <span id="pmLastSeen"></span>
+
+        <div class="settings-layout">
+          <!-- Left Sidebar Navigation -->
+          <nav class="settings-nav" role="tablist" aria-label="Settings Categories">
+            <button class="settings-nav-item active" type="button" data-tab="tabAppearance">
+              <span class="nav-icon">🎨</span>
+              <span>Appearance</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-tab="tabNotifications">
+              <span class="nav-icon">🔔</span>
+              <span>Notifications</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-tab="tabSecurity">
+              <span class="nav-icon">🔒</span>
+              <span>Security</span>
+            </button>
+            <button class="settings-nav-item" type="button" data-tab="tabAccount">
+              <span class="nav-icon">👤</span>
+              <span>Account</span>
+            </button>
+          </nav>
+
+          <!-- Right Content Panels -->
+          <form id="settingsModalForm" class="settings-content">
+            <!-- Appearance Panel -->
+            <div id="tabAppearance" class="settings-panel active">
+              <h4 class="panel-heading">Appearance & Theme</h4>
+              
+              <div class="form-group">
+                <label for="smThemeSelect">App Theme</label>
+                <select id="smThemeSelect">
+                  <option value="system">System (Auto)</option>
+                  <option value="light">Light Mode</option>
+                  <option value="dark">Dark Mode</option>
+                </select>
+              </div>
+
+              <div class="form-group" style="margin-top: 14px;">
+                <label for="smWallpaperSelect">Chat Wallpaper</label>
+                <select id="smWallpaperSelect">
+                  <option value="default">WhatsApp Doodle</option>
+                  <option value="emerald">Sleek Emerald</option>
+                  <option value="dark-slate">Dark Slate</option>
+                  <option value="soft-sand">Warm Sand</option>
+                  <option value="cyber-night">Cyber Night</option>
+                  <option value="sky-blue">Sky Blue</option>
+                </select>
               </div>
             </div>
-          </div>
-          <div class="profile-actions">
-            <button id="pmEditBtn" class="google-btn">Edit Profile</button>
-            <button id="pmCloseBtn" class="ghost-button">Close</button>
-          </div>
+
+            <!-- Notifications Panel -->
+            <div id="tabNotifications" class="settings-panel hidden">
+              <h4 class="panel-heading">Notifications</h4>
+              
+              <div class="notif-options-grid">
+                <label class="toggle-row">
+                  <span>Email Alerts</span>
+                  <input id="smNotifEmail" type="checkbox" />
+                </label>
+                <label class="toggle-row">
+                  <span>Push Notifications</span>
+                  <input id="smNotifPush" type="checkbox" />
+                </label>
+                <label class="toggle-row">
+                  <span>Sound Effects</span>
+                  <input id="smNotifSound" type="checkbox" />
+                </label>
+              </div>
+            </div>
+
+            <!-- Security Panel -->
+            <div id="tabSecurity" class="settings-panel hidden">
+              <h4 class="panel-heading">Security & Password</h4>
+              
+              <div class="security-info-box">
+                <p>Protect your account or update your credentials.</p>
+                <button id="smChangePassword" type="button" class="ghost-button" style="margin-top:10px;">Change Password</button>
+              </div>
+            </div>
+
+            <!-- Account Panel -->
+            <div id="tabAccount" class="settings-panel hidden">
+              <h4 class="panel-heading">Account Overview</h4>
+              
+              <div class="form-group">
+                <label>Registered Email</label>
+                <input id="smAccountEmail" type="text" readonly disabled style="opacity:0.75;" />
+              </div>
+              <div class="form-group" style="margin-top:10px;">
+                <label>Display Name</label>
+                <input id="smAccountName" type="text" readonly disabled style="opacity:0.75;" />
+              </div>
+            </div>
+
+            <div class="settings-footer">
+              <button id="smSaveSettings" type="submit" class="primary-btn">Save Settings</button>
+            </div>
+          </form>
         </div>
       </div>
     </div>
+
+    <!-- View Profile Modal -->
+    <section id="profilePage" class="profile-page hidden">
+      <div class="profile-modal-card">
+        <button id="ppClose" type="button" class="profile-close-btn" aria-label="Close profile">×</button>
+        
+        <div class="profile-modal-header">
+          <div class="profile-avatar-wrapper">
+            <img id="ppAvatarImg" src="" alt="avatar" />
+            <div id="ppAvatarInitials" class="avatar-initials-fallback hidden">U</div>
+            <input id="ppFileInput" type="file" accept="image/*" class="hidden" />
+            <button id="ppChooseBtn" type="button" class="avatar-edit-badge" title="Change Photo">📷</button>
+          </div>
+          
+          <div class="profile-header-info">
+            <h2 id="ppDisplayName">Your Name</h2>
+            <p id="ppEmail" class="profile-email-text">you@example.com</p>
+            <div class="profile-status-row">
+              <span id="ppStatus" class="status-pill">Offline</span>
+              <span class="profile-joined-text">Joined <span id="ppJoined"></span></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="ppAvatarActions" class="avatar-save-bar hidden">
+          <span>New photo selected:</span>
+          <button id="ppSavePhoto" type="button" class="google-btn small">Save Photo</button>
+          <button id="ppCancelPhoto" type="button" class="ghost-button small">Cancel</button>
+        </div>
+
+        <form id="ppSettingsForm" class="profile-settings-form" style="margin-top:14px;">
+          <div class="form-group">
+            <label for="ppEditDisplayName">Display Name</label>
+            <input id="ppEditDisplayName" type="text" maxlength="60" placeholder="Enter display name" />
+          </div>
+
+          <div class="form-group">
+            <label for="ppEditBio">About / Bio</label>
+            <textarea id="ppEditBio" maxlength="500" rows="2" placeholder="Tell people about yourself..."></textarea>
+            <p id="ppBio" class="hidden"></p>
+            <span id="ppLastSeen" class="hidden"></span>
+          </div>
+
+          <div class="profile-actions-bar" style="justify-content: flex-end; margin-top: 14px;">
+            <button id="ppSaveSettings" type="submit" class="primary-btn">Save Profile</button>
+          </div>
+        </form>
+      </div>
+    </section>
 
     <!-- Profile Details Page (shown after login before chat) -->
     <section id="profileDetailsView" class="profile-details-shell hidden">
