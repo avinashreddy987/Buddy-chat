@@ -3,6 +3,10 @@
   Usage: node backend/migrate_users.js
 */
 const { MongoClient } = require('mongodb');
+const dns = require('dns');
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch (e) {}
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 

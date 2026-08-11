@@ -1,4 +1,10 @@
 require("dotenv").config();
+const dns = require("dns");
+try {
+  dns.setServers(["8.8.8.8", "1.1.1.1", "8.8.4.4"]);
+} catch (err) {
+  console.warn("Could not set DNS fallback servers:", err);
+}
 console.log("MONGODB_URI =", process.env.MONGODB_URI);
 
 const http = require("http");
@@ -75,6 +81,14 @@ async function initDb() {
       chat: 1,
       createdAt: 1
     });
+    // Additional indexes to support recent-chats and search queries
+    try {
+      await messagesCollection.createIndex({ fromEmail: 1, toEmail: 1, createdAt: -1 });
+    } catch (e) {}
+    try {
+      await usersCollection.createIndex({ email: 1 });
+      await usersCollection.createIndex({ displayName: 1 });
+    } catch (e) {}
     // Log some diagnostics about the MongoDB connection (mask credentials)
     try {
       const masked = (MONGODB_URI || '').replace(/:(?:\\\/\\\/)?([^@]+)@/, ':***@');
@@ -131,7 +145,8 @@ function readBody(req) {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1_000_000) {
+      // Allow up to ~10MB for base64 audio uploads sent as JSON
+      if (body.length > 10_000_000) {
         req.destroy();
         reject(new Error("Request body too large"));
       }
@@ -330,7 +345,7 @@ function getUsersFor(email) {
     }));
 }
 
-function createMessage({ sender, toEmail, text }) {
+function createMessage({ sender, toEmail, text, audioUrl = null, audioDuration = null, edited = false, deleted = false }) {
   const recipient = users.get(toEmail);
   const cleanText = String(text || "").trim().slice(0, 1000);
 
@@ -342,8 +357,8 @@ function createMessage({ sender, toEmail, text }) {
     throw new Error("Pick another user.");
   }
 
-  if (!cleanText) {
-    throw new Error("Type a message first.");
+  if (!cleanText && !audioUrl) {
+    throw new Error("Type a message or record audio first.");
   }
 
   const message = {
@@ -353,10 +368,19 @@ function createMessage({ sender, toEmail, text }) {
     fromName: sender.displayName,
     toEmail: recipient.email,
     toName: recipient.displayName,
-    text: cleanText,
+    text: cleanText || "",
+    audioUrl: audioUrl || null,
+    audioDuration: audioDuration || null,
+    edited: !!edited,
+    deleted: !!deleted,
+    reactions: {}, // emoji -> [emails]
+    status: "sent", // sent | delivered | seen
     createdAt: Date.now(),
+    deliveredAt: null,
+    seenAt: null,
   };
 
+  // store in-memory for fallback
   messages.push(message);
 
   if (messagesCollection) {
@@ -377,6 +401,7 @@ function createMessage({ sender, toEmail, text }) {
   } catch (err) {
     // ignore
   }
+
   return message;
 }
 
@@ -485,19 +510,25 @@ async function handleVerifyOtp(req, res) {
   return sendJson(res, 200, { verificationToken });
 }
 
-// Password reset: send OTP to logged-in user's email after validating current password
+// Password reset: send OTP to user's email without requiring current password
 async function handlePasswordSendOtp(req, res) {
   const session = getSession(req);
-  if (!session) return sendJson(res, 401, { error: "Please log in again." });
-
   const body = await readBody(req);
-  const current = String(body.currentPassword || "");
+  const email = normalizeEmail(body.email || (session && session.user && session.user.email));
 
-  if (!verifyPasswordWithFallback(current, session.user)) {
-    return sendJson(res, 401, { error: "Current password is incorrect." });
+  if (!email) {
+    return sendJson(res, 400, { error: "Please provide your email address." });
   }
 
-  const email = session.user.email;
+  let user = users.get(email);
+  if (!user && usersCollection) {
+    try { user = await usersCollection.findOne({ email }); } catch (e) {}
+  }
+
+  if (!user) {
+    return sendJson(res, 404, { error: "No account found with this email address." });
+  }
+
   const otp = generateOtp();
   const otpSalt = crypto.randomBytes(16).toString("hex");
 
@@ -588,7 +619,10 @@ async function handlePasswordUpdate(req, res) {
     return sendJson(res, 400, { error: passwordError });
   }
 
-  const user = users.get(verified.email);
+  let user = users.get(verified.email);
+  if (!user && usersCollection) {
+    try { user = await usersCollection.findOne({ email: verified.email }); } catch (e) {}
+  }
   if (!user) {
     verifiedRegistrations.delete(verificationToken);
     return sendJson(res, 404, { error: "User not found." });
@@ -597,6 +631,7 @@ async function handlePasswordUpdate(req, res) {
   const passwordData = hashPassword(password);
   user.passwordHash = passwordData.hash;
   user.passwordSalt = passwordData.salt;
+  users.set(verified.email, user);
   saveUserToDb(user).catch(() => {});
   verifiedRegistrations.delete(verificationToken);
 
@@ -713,15 +748,15 @@ async function handleGoogleAuth(req, res) {
 }
 
 async function handleApi(req, res) {
-  if (req.method === "POST" && req.url === "/api/register/request-otp") {
+  if (req.method === "POST" && (req.url === "/api/register/request-otp" || req.url === "/api/send-otp")) {
     return handleRegisterRequest(req, res);
   }
 
-  if (req.method === "POST" && req.url === "/api/register/verify-otp") {
+  if (req.method === "POST" && (req.url === "/api/register/verify-otp" || req.url === "/api/verify-otp")) {
     return handleVerifyOtp(req, res);
   }
 
-  if (req.method === "POST" && req.url === "/api/register/complete") {
+  if (req.method === "POST" && (req.url === "/api/register/complete" || req.url === "/api/register-complete")) {
     return handleCompleteRegistration(req, res);
   }
 
@@ -767,18 +802,19 @@ async function handleApi(req, res) {
       authProvider: session.user.authProvider || "local",
       bio: session.user.bio || "",
       theme: session.user.theme || "light",
+      wallpaper: session.user.wallpaper || "default",
       joinedAt: session.user.joinedAt || Date.now(),
       lastSeen: session.user.lastSeen || Date.now(),
     });
   }
 
   if (req.method === "POST" && req.url === "/api/me/update") {
-    // update current user's profile (displayName)
+    // update current user's profile
     const body = await readBody(req);
     const displayName = String((body.displayName || "")).trim().slice(0, 60);
     const bio = String((body.bio || "")).trim().slice(0, 500);
-    const profilePicture = String((body.profilePicture || "")).trim().slice(0, 1000) || null;
-    const theme = body.theme === "dark" ? "dark" : "light";
+    const theme = (body.theme === "dark" || body.theme === "system") ? body.theme : "light";
+    const wallpaper = String(body.wallpaper || "").trim().slice(0, 30) || "default";
 
     if (!displayName) {
       return sendJson(res, 400, { error: "Display name is required." });
@@ -786,29 +822,227 @@ async function handleApi(req, res) {
 
     session.user.displayName = displayName;
     session.user.bio = bio;
-    session.user.profilePicture = profilePicture;
+    if (body.profilePicture !== undefined) {
+      session.user.profilePicture = body.profilePicture ? String(body.profilePicture).trim().slice(0, 1000) : null;
+    }
     session.user.theme = theme;
+    session.user.wallpaper = wallpaper;
+    // optional notifications preferences
+    if (body.notifications && typeof body.notifications === 'object') {
+      session.user.notifications = {
+        email: !!body.notifications.email,
+        push: !!body.notifications.push,
+        sound: !!body.notifications.sound,
+      };
+    }
     // persist
     saveUserToDb(session.user).catch(() => {});
+    broadcastUsersUpdate();
 
     // issue a new token so clients can keep displayName in JWT
     const token = createJwt(session.user);
-    return sendJson(res, 200, { ok: true, token, email: session.user.email, displayName: session.user.displayName, profilePicture: session.user.profilePicture || null, bio: session.user.bio || "", theme: session.user.theme || "light" });
+    return sendJson(res, 200, { ok: true, token, email: session.user.email, displayName: session.user.displayName, profilePicture: session.user.profilePicture || null, bio: session.user.bio || "", theme: session.user.theme || "light", wallpaper: session.user.wallpaper || "default" });
   }
 
-  if (req.method === "GET" && req.url === "/api/users") {
+  // Upload profile photo (base64 JSON payload)
+  if (req.method === 'POST' && req.url === '/api/me/photo') {
+    try {
+      const body = await readBody(req);
+      const imageBase64 = body.imageBase64;
+      const imageType = String(body.imageType || 'image/png');
+      if (!imageBase64) return sendJson(res, 400, { error: 'Missing image data' });
+      // limit size ~5MB
+      if (imageBase64.length > 6_000_000) return sendJson(res, 400, { error: 'Image too large' });
 
-    console.log(
-      "USERS SENT:",
-      getUsersFor(session.email).map(u => ({
+      const uploadsDir = path.resolve(FRONTEND_DIR, 'uploads');
+      try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (e) {}
+      const ext = imageType.includes('png') ? '.png' : imageType.includes('jpeg') || imageType.includes('jpg') ? '.jpg' : '.webp';
+      const filename = `${Date.now()}_${Math.random().toString(36).slice(2,8)}${ext}`;
+      const filepath = path.join(uploadsDir, filename);
+      try {
+        fs.writeFileSync(filepath, Buffer.from(imageBase64, 'base64'));
+      } catch (err) {
+        console.error('Failed to save profile image', err);
+        return sendJson(res, 500, { error: 'Failed to save image' });
+      }
+
+      const imageUrl = `/uploads/${filename}`;
+      session.user.profilePicture = imageUrl;
+      saveUserToDb(session.user).catch(() => {});
+      broadcastUsersUpdate();
+      const token = createJwt(session.user);
+      return sendJson(res, 200, { ok: true, token, profilePicture: session.user.profilePicture, displayName: session.user.displayName, email: session.user.email });
+    } catch (err) {
+      return sendJson(res, 500, { error: 'Upload failed' });
+    }
+  }
+
+  // Profile statistics: total chats, total messages, shared media count
+  if (req.method === 'GET' && req.url === '/api/me/stats') {
+    try {
+      let totalMessages = 0;
+      let totalChats = 0;
+      let sharedMediaCount = 0;
+      if (messagesCollection) {
+        const pipeline = [
+          { $match: { $or: [{ fromEmail: session.email }, { toEmail: session.email }] } },
+          { $project: { other: { $cond: [{ $eq: ["$fromEmail", session.email] }, "$toEmail", "$fromEmail"] }, hasMedia: { $cond: [{ $or: [{ $ifNull: ["$audioUrl", false] }, { $ifNull: ["$attachments", false] }] }, 1, 0] } } },
+          { $group: { _id: null, totalMessages: { $sum: 1 }, sharedMediaCount: { $sum: "$hasMedia" }, chats: { $addToSet: "$other" } } },
+          { $project: { totalMessages: 1, sharedMediaCount: 1, totalChats: { $size: "$chats" } } }
+        ];
+        const agg = await messagesCollection.aggregate(pipeline).toArray();
+        if (agg && agg[0]) {
+          totalMessages = agg[0].totalMessages || 0;
+          sharedMediaCount = agg[0].sharedMediaCount || 0;
+          totalChats = agg[0].totalChats || 0;
+        }
+      } else {
+        // fallback to in-memory
+        const set = new Set();
+        for (const m of messages) {
+          if (m.fromEmail === session.email || m.toEmail === session.email) {
+            const other = m.fromEmail === session.email ? m.toEmail : m.fromEmail;
+            set.add(other);
+            totalMessages++;
+            if (m.audioUrl || m.attachments) sharedMediaCount++;
+          }
+        }
+        totalChats = set.size;
+      }
+
+      return sendJson(res, 200, { totalChats, totalMessages, sharedMediaCount });
+    } catch (err) {
+      console.error('Stats error', err);
+      return sendJson(res, 500, { error: 'Could not compute stats' });
+    }
+  }
+
+  // Search users by query (email or displayName). Returns at most 20 results.
+  if (req.method === "GET" && req.url.startsWith("/api/users/search")) {
+    try {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const q = String(url.searchParams.get("q") || "").trim();
+
+      // If query is empty, return empty results (clients should only call when user types)
+      if (!q) return sendJson(res, 200, { users: [] });
+
+      // build case-insensitive regex safely
+      const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(esc, "i");
+
+      let found = [];
+      if (usersCollection) {
+        try {
+          found = await usersCollection
+            .find({
+              $and: [
+                { email: { $ne: session.email } },
+                { $or: [{ email: regex }, { displayName: regex }] },
+              ],
+            })
+            .limit(20)
+            .toArray();
+        } catch (e) {
+          found = [];
+        }
+      } else {
+        // fallback to in-memory map
+        found = [...users.values()].filter((u) => {
+          if (!u || !u.email) return false;
+          if (u.email === session.email) return false;
+          const dn = String(u.displayName || "");
+          return regex.test(u.email) || regex.test(dn);
+        }).slice(0, 20);
+      }
+
+      const out = (found || []).map((u) => ({
         email: u.email,
-        online: u.online
-      }))
-    );
+        displayName: u.displayName || getDisplayName(u.email),
+        profilePicture: u.profilePicture || null,
+        online: activeUsers.has(u.email),
+        lastSeen: u.lastSeen || Date.now(),
+        unreadCount: session.user.unread?.[u.email] || 0,
+      }));
 
-    return sendJson(res, 200, {
-      users: getUsersFor(session.email)
-    });
+      return sendJson(res, 200, { users: out });
+    } catch (err) {
+      return sendJson(res, 500, { error: "Search failed." });
+    }
+  }
+
+  // Recent chats: return users who have exchanged messages with the current user
+  if (req.method === "GET" && req.url === "/api/recent-chats") {
+    try {
+      // If messagesCollection available, use aggregation for efficiency
+      let recent = [];
+      if (messagesCollection) {
+        const pipeline = [
+          { $match: { $or: [{ fromEmail: session.email }, { toEmail: session.email }] } },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: { $cond: [{ $eq: ["$fromEmail", session.email] }, "$toEmail", "$fromEmail"] },
+              lastMessage: { $first: "$$ROOT" },
+            },
+          },
+          { $sort: { "lastMessage.createdAt": -1 } },
+          { $limit: 50 },
+        ];
+
+        const agg = await messagesCollection.aggregate(pipeline).toArray();
+        for (const row of agg) {
+          const other = row._id;
+          let u = null;
+          if (usersCollection) {
+            try { u = await usersCollection.findOne({ email: other }); } catch (e) { u = null; }
+          }
+          if (!u) u = users.get(other) || { email: other, displayName: getDisplayName(other), profilePicture: null, lastSeen: Date.now() };
+
+          recent.push({
+            email: other,
+            displayName: u.displayName || getDisplayName(other),
+            profilePicture: u.profilePicture || null,
+            online: activeUsers.has(other),
+            unreadCount: session.user.unread?.[other] || 0,
+            lastMessageText: row.lastMessage && row.lastMessage.text ? row.lastMessage.text : "",
+            lastMessageTime: row.lastMessage && row.lastMessage.createdAt ? row.lastMessage.createdAt : 0,
+          });
+        }
+      } else {
+        // fallback to in-memory messages array
+        const map = new Map();
+        const sorted = messages.slice().sort((a, b) => b.createdAt - a.createdAt);
+        for (const m of sorted) {
+          const other = m.fromEmail === session.email ? m.toEmail : (m.toEmail === session.email ? m.fromEmail : null);
+          if (!other) continue;
+          if (!map.has(other)) map.set(other, m);
+        }
+        for (const [other, lastMessage] of map.entries()) {
+          const u = users.get(other) || { email: other, displayName: getDisplayName(other), profilePicture: null, lastSeen: Date.now() };
+          recent.push({
+            email: other,
+            displayName: u.displayName || getDisplayName(other),
+            profilePicture: u.profilePicture || null,
+            online: activeUsers.has(other),
+            unreadCount: session.user.unread?.[other] || 0,
+            lastMessageText: lastMessage.text || "",
+            lastMessageTime: lastMessage.createdAt || 0,
+          });
+        }
+        // sort by lastMessageTime desc
+        recent.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+      }
+
+      return sendJson(res, 200, { recentChats: recent });
+    } catch (err) {
+      console.error('Recent chats error', err);
+      return sendJson(res, 500, { error: 'Could not fetch recent chats' });
+    }
+  }
+
+  // Deprecated: /api/users no longer returns all users for privacy reasons.
+  if (req.method === "GET" && req.url === "/api/users") {
+    return sendJson(res, 403, { error: "Endpoint removed. Use /api/recent-chats and /api/users/search?q=" });
   }
 
   if (req.method === "POST" && req.url === "/api/unread/reset") {
@@ -841,6 +1075,38 @@ async function handleApi(req, res) {
     return sendJson(res, 200, { messages: chat });
   }
 
+  if (req.method === 'POST' && req.url === '/api/voice/upload') {
+    try {
+      const body = await readBody(req);
+      const to = normalizeEmail(body.to || '');
+      const audioBase64 = body.audioBase64;
+      const audioType = String(body.audioType || 'audio/webm');
+      const duration = Number(body.duration || 0);
+
+      if (!to || !users.has(to)) return sendJson(res, 400, { error: 'Invalid recipient' });
+      if (!audioBase64) return sendJson(res, 400, { error: 'Missing audio data' });
+
+      const uploadsDir = path.resolve(FRONTEND_DIR, 'uploads');
+      try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (e) {}
+      const ext = audioType.includes('ogg') ? '.ogg' : audioType.includes('wav') ? '.wav' : '.webm';
+      const filename = `${Date.now()}_${Math.random().toString(36).slice(2,8)}${ext}`;
+      const filepath = path.join(uploadsDir, filename);
+      try {
+        fs.writeFileSync(filepath, Buffer.from(audioBase64, 'base64'));
+      } catch (err) {
+        console.error('Failed to save audio', err);
+        return sendJson(res, 500, { error: 'Failed to save audio' });
+      }
+
+      const audioUrl = `/uploads/${filename}`;
+      const message = createMessage({ sender: session.user, toEmail: to, text: '', audioUrl, audioDuration: duration });
+      io.to(`user:${message.fromEmail}`).to(`user:${message.toEmail}`).emit('private:message', message);
+      return sendJson(res, 201, { message });
+    } catch (err) {
+      return sendJson(res, 500, { error: 'Upload failed' });
+    }
+  }
+
   if (req.method === "POST" && req.url === "/api/messages") {
     const body = await readBody(req);
     const message = createMessage({
@@ -871,13 +1137,36 @@ function serveStatic(req, res) {
 
   fs.readFile(filePath, (error, content) => {
     if (error) {
-      res.writeHead(404);
-      return res.end("Not found");
+      // Fallback to index.html for SPA routes or non-file paths
+      const indexPath = path.resolve(FRONTEND_DIR, "index.html");
+      return fs.readFile(indexPath, (err2, indexContent) => {
+        if (err2) {
+          res.writeHead(404);
+          return res.end("Not found");
+        }
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(indexContent);
+      });
     }
 
-    const ext = path.extname(filePath);
-    const type =
-      ext === ".html" ? "text/html" : ext === ".css" ? "text/css" : "application/javascript";
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes = {
+      ".html": "text/html",
+      ".css": "text/css",
+      ".js": "application/javascript",
+      ".json": "application/json",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+      ".svg": "image/svg+xml",
+      ".webm": "audio/webm",
+      ".ogg": "audio/ogg",
+      ".wav": "audio/wav",
+      ".mp3": "audio/mpeg",
+    };
+    const type = mimeTypes[ext] || "application/octet-stream";
 
     res.writeHead(200, { "Content-Type": type });
     res.end(content);
@@ -966,6 +1255,8 @@ io.on("connection", (socket) => {
         sender: user,
         toEmail: normalizeEmail(payload && payload.to),
         text: payload && payload.text,
+        audioUrl: payload && payload.audioUrl || null,
+        audioDuration: payload && payload.audioDuration || null,
       });
 
       io.to(`user:${message.fromEmail}`)
@@ -977,15 +1268,144 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Typing indicator: relay to recipient
-  socket.on("typing", (payload) => {
+  // Typing indicator: debounce on server to avoid floods
+  let typingTimeouts = {};
+  socket.on("typing:start", (payload) => {
     try {
       const toEmail = normalizeEmail(payload && payload.to);
       if (!toEmail) return;
-      io.to(`user:${toEmail}`).emit("typing", { from: user.email, to: toEmail });
+      io.to(`user:${toEmail}`).emit("typing:start", { from: user.email, to: toEmail, text: `${user.displayName} is typing...` });
+      // clear previous timeout if exists
+      if (typingTimeouts[user.email]) clearTimeout(typingTimeouts[user.email]);
+      typingTimeouts[user.email] = setTimeout(() => {
+        io.to(`user:${toEmail}`).emit("typing:stop", { from: user.email, to: toEmail });
+        delete typingTimeouts[user.email];
+      }, 2000);
+    } catch (err) {}
+  });
+
+  socket.on("typing:stop", (payload) => {
+    try {
+      const toEmail = normalizeEmail(payload && payload.to);
+      if (!toEmail) return;
+      if (typingTimeouts[user.email]) {
+        clearTimeout(typingTimeouts[user.email]);
+        delete typingTimeouts[user.email];
+      }
+      io.to(`user:${toEmail}`).emit("typing:stop", { from: user.email, to: toEmail });
+    } catch (err) {}
+  });
+
+  // Message delivered acknowledgement (client should emit when they receive via socket)
+  socket.on("message:delivered", async (payload) => {
+    try {
+      const msgId = payload && payload.id;
+      if (!msgId) return;
+      // update message status to delivered and set deliveredAt
+      if (messagesCollection) {
+        await messagesCollection.updateOne({ id: msgId }, { $set: { status: 'delivered', deliveredAt: Date.now() } }).catch(() => {});
+      }
+      // update in-memory
+      const m = messages.find((x) => x.id === msgId);
+      if (m) { m.status = 'delivered'; m.deliveredAt = Date.now(); }
+      // notify sender if online
+      if (m && m.fromEmail) io.to(`user:${m.fromEmail}`).emit('message:delivered', { id: msgId, deliveredAt: Date.now() });
+    } catch (err) {}
+  });
+
+  // Message seen: mark messages in DB as seen when recipient opens conversation
+  socket.on("message:seen", async (payload) => {
+    try {
+      const ids = payload && payload.ids; // array of message ids
+      if (!Array.isArray(ids) || !ids.length) return;
+      const now = Date.now();
+      if (messagesCollection) {
+        await messagesCollection.updateMany({ id: { $in: ids } }, { $set: { status: 'seen', seenAt: now } }).catch(() => {});
+      }
+      // update in-memory
+      ids.forEach((id) => {
+        const mm = messages.find((x) => x.id === id);
+        if (mm) { mm.status = 'seen'; mm.seenAt = now; }
+      });
+      // notify senders
+      ids.forEach((id) => {
+        const mm = messages.find((x) => x.id === id);
+        if (mm && mm.fromEmail) io.to(`user:${mm.fromEmail}`).emit('message:seen', { id, seenAt: now });
+      });
+    } catch (err) {}
+  });
+
+  // Message reaction toggle and broadcast
+  socket.on("message:reaction", async (payload) => {
+    try {
+      const { id, reaction } = payload || {};
+      if (!id || !reaction) return;
+      const reactor = user.email;
+
+      const updateReactionsObj = (currentMap) => {
+        const resMap = Object.assign({}, currentMap || {});
+        const wasReactedWithSame = Array.isArray(resMap[reaction]) && resMap[reaction].includes(reactor);
+        
+        // Remove reactor from all existing reaction arrays
+        for (const k of Object.keys(resMap)) {
+          if (Array.isArray(resMap[k])) {
+            resMap[k] = resMap[k].filter(e => e !== reactor);
+            if (resMap[k].length === 0) delete resMap[k];
+          }
+        }
+        
+        // Toggle: if it wasn't already reacted with this exact emoji, add it
+        if (!wasReactedWithSame) {
+          if (!resMap[reaction]) resMap[reaction] = [];
+          resMap[reaction].push(reactor);
+        }
+        return resMap;
+      };
+
+      let updated = {};
+      let targetMessage = null;
+
+      if (messagesCollection) {
+        const msg = await messagesCollection.findOne({ id });
+        if (msg) {
+          targetMessage = msg;
+          updated = updateReactionsObj(msg.reactions || {});
+          await messagesCollection.updateOne({ id }, { $set: { reactions: updated } });
+          const mm = messages.find((x) => x.id === id);
+          if (mm) mm.reactions = updated;
+        }
+      } else {
+        const mm = messages.find((x) => x.id === id);
+        if (mm) {
+          targetMessage = mm;
+          updated = updateReactionsObj(mm.reactions || {});
+          mm.reactions = updated;
+        }
+      }
+
+      if (targetMessage) {
+        io.to(`user:${targetMessage.fromEmail}`).to(`user:${targetMessage.toEmail}`).emit('message:reaction', { id, reactions: updated });
+      } else {
+        io.emit('message:reaction', { id, reactions: updated });
+      }
     } catch (err) {
-      // ignore
+      console.error('Reaction error:', err);
     }
+  });
+
+  // Voice upload notification (backend handles storing file; client emits when upload done)
+  socket.on('voice:uploaded', (payload) => {
+    try {
+      const { id, audioUrl, audioDuration } = payload || {};
+      if (!id) return;
+      // update message if exists in memory
+      const mm = messages.find((x) => x.id === id);
+      if (mm) { mm.audioUrl = audioUrl; mm.audioDuration = audioDuration; }
+      if (messagesCollection) {
+        messagesCollection.updateOne({ id }, { $set: { audioUrl, audioDuration } }).catch(() => {});
+      }
+      io.emit('voice:uploaded', { id, audioUrl, audioDuration });
+    } catch (err) {}
   });
 
   socket.on("disconnect", () => {

@@ -73,7 +73,8 @@ const passwordStep = document.querySelector("#passwordStep");
 const currentUser = document.querySelector("#currentUser");
 const currentEmail = document.querySelector("#currentEmail");
 // left-corner logout removed; logout remains in profile menu
-const usersList = document.querySelector("#usersList");
+const recentChatsList = document.querySelector("#recentChatsList");
+const searchResultsList = document.querySelector("#searchResultsList");
 const chatTitle = document.querySelector("#chatTitle");
 const chatStatus = document.querySelector("#chatStatus");
 const emptyState = document.querySelector("#emptyState");
@@ -88,13 +89,14 @@ const menuDisplayName = document.querySelector("#menuDisplayName");
 const menuEmail = document.querySelector("#menuEmail");
 const changePasswordBtn = document.querySelector("#changePasswordBtn");
 const menuLogoutBtn = document.querySelector("#menuLogoutBtn");
+const viewProfileBtn = document.querySelector("#viewProfileBtn");
 const headerAvatar = document.querySelector("#headerAvatar");
 const sidebarEl = document.querySelector('.sidebar');
 const logoMark = document.querySelector('.logo-mark');
 
-// Change password modal elements
+// Change / Reset password modal elements
 const changePasswordModal = document.querySelector("#changePasswordModal");
-const cpCurrentPassword = document.querySelector("#cpCurrentPassword");
+const cpEmailInput = document.querySelector("#cpEmailInput");
 const cpSendOtpButton = document.querySelector("#cpSendOtpButton");
 const cpStatus = document.querySelector("#cpStatus");
 const cpError = document.querySelector("#cpError");
@@ -106,8 +108,10 @@ const cpConfirmNewPassword = document.querySelector("#cpConfirmNewPassword");
 const cpUpdateButton = document.querySelector("#cpUpdateButton");
 const cpCancelBtn = document.querySelector("#cpCancelBtn");
 const closeChangePassword = document.querySelector("#closeChangePassword");
+const loginForgotPasswordBtn = document.querySelector("#loginForgotPasswordBtn");
 
 let cpVerificationToken = "";
+let cpTargetEmail = "";
 
 let token = localStorage.getItem("chatToken") || "";
 let email = localStorage.getItem("chatEmail") || "";
@@ -118,7 +122,8 @@ let socket = null;
 let usersTimer = null;
 let pendingEmail = "";
 let verificationToken = "";
-let usersCache = [];
+let recentChatsCache = [];
+let searchCache = [];
 // Parse JWT payload without verifying signature to inspect expiry locally
 function parseJwtPayload(t) {
   try {
@@ -203,6 +208,139 @@ function setRegisterStep(step) {
   passwordStep.classList.toggle("active", step === "password");
 }
 
+// Forgot / Change Password Modal Logic
+function openChangePasswordModal() {
+  if (!changePasswordModal) return;
+  cpVerificationToken = "";
+  cpTargetEmail = email || (loginEmailInput ? loginEmailInput.value.trim() : "");
+  if (cpEmailInput) cpEmailInput.value = cpTargetEmail;
+  if (cpOtpInput) cpOtpInput.value = "";
+  if (cpNewPassword) cpNewPassword.value = "";
+  if (cpConfirmNewPassword) cpConfirmNewPassword.value = "";
+  if (cpStatus) cpStatus.textContent = "";
+  if (cpError) cpError.textContent = "";
+  
+  const step1 = document.getElementById("cpStepEmail");
+  const step2 = document.getElementById("cpStepOtp");
+  const step3 = document.getElementById("cpStepNewPassword");
+  if (step1) step1.classList.remove("hidden");
+  if (step2) step2.classList.add("hidden");
+  if (step3) step3.classList.add("hidden");
+
+  changePasswordModal.classList.remove("hidden");
+  changePasswordModal.classList.add("active");
+}
+
+function closeChangePasswordModal() {
+  if (changePasswordModal) {
+    changePasswordModal.classList.add("hidden");
+    changePasswordModal.classList.remove("active");
+  }
+}
+
+if (changePasswordBtn) changePasswordBtn.addEventListener("click", () => openChangePasswordModal());
+if (loginForgotPasswordBtn) loginForgotPasswordBtn.addEventListener("click", () => openChangePasswordModal());
+if (closeChangePassword) closeChangePassword.addEventListener("click", () => closeChangePasswordModal());
+if (cpCancelBtn) cpCancelBtn.addEventListener("click", () => closeChangePasswordModal());
+
+if (cpSendOtpButton) {
+  cpSendOtpButton.addEventListener("click", async () => {
+    if (cpStatus) cpStatus.textContent = "Sending OTP...";
+    if (cpError) cpError.textContent = "";
+    cpTargetEmail = cpEmailInput ? cpEmailInput.value.trim() : "";
+    if (!cpTargetEmail) {
+      if (cpError) cpError.textContent = "Please enter your email address.";
+      if (cpStatus) cpStatus.textContent = "";
+      return;
+    }
+    try {
+      await api("/api/password/send-otp", { method: "POST", body: JSON.stringify({ email: cpTargetEmail }) });
+      if (cpStatus) cpStatus.textContent = `OTP code sent to ${cpTargetEmail}!`;
+      const step1 = document.getElementById("cpStepEmail");
+      const step2 = document.getElementById("cpStepOtp");
+      if (step1) step1.classList.add("hidden");
+      if (step2) step2.classList.remove("hidden");
+    } catch (err) {
+      if (cpError) cpError.textContent = err.message || "Failed to send OTP.";
+      if (cpStatus) cpStatus.textContent = "";
+    }
+  });
+}
+
+if (cpVerifyOtpButton) {
+  cpVerifyOtpButton.addEventListener("click", async () => {
+    if (cpStatus) cpStatus.textContent = "Verifying code...";
+    if (cpError) cpError.textContent = "";
+    const otpVal = cpOtpInput ? cpOtpInput.value.trim() : "";
+    if (!otpVal) {
+      if (cpError) cpError.textContent = "Please enter the OTP code.";
+      if (cpStatus) cpStatus.textContent = "";
+      return;
+    }
+    try {
+      const data = await api("/api/password/verify-otp", { method: "POST", body: JSON.stringify({ email: cpTargetEmail, otp: otpVal }) });
+      cpVerificationToken = data.verificationToken;
+      if (cpStatus) cpStatus.textContent = "Code verified! Enter your new password.";
+      const step2 = document.getElementById("cpStepOtp");
+      const step3 = document.getElementById("cpStepNewPassword");
+      if (step2) step2.classList.add("hidden");
+      if (step3) step3.classList.remove("hidden");
+    } catch (err) {
+      if (cpError) cpError.textContent = err.message || "Invalid OTP code.";
+      if (cpStatus) cpStatus.textContent = "";
+    }
+  });
+}
+
+if (cpResendOtpButton) {
+  cpResendOtpButton.addEventListener("click", async () => {
+    if (cpStatus) cpStatus.textContent = "Resending OTP...";
+    if (cpError) cpError.textContent = "";
+    try {
+      await api("/api/password/send-otp", { method: "POST", body: JSON.stringify({ email: cpTargetEmail }) });
+      if (cpStatus) cpStatus.textContent = "New OTP code sent!";
+    } catch (err) {
+      if (cpError) cpError.textContent = err.message || "Failed to resend OTP.";
+      if (cpStatus) cpStatus.textContent = "";
+    }
+  });
+}
+
+if (cpUpdateButton) {
+  cpUpdateButton.addEventListener("click", async () => {
+    if (cpStatus) cpStatus.textContent = "Updating password...";
+    if (cpError) cpError.textContent = "";
+    const newPass = cpNewPassword ? cpNewPassword.value : "";
+    const confirmPass = cpConfirmNewPassword ? cpConfirmNewPassword.value : "";
+    if (!newPass || newPass.length < 6) {
+      if (cpError) cpError.textContent = "Password must be at least 6 characters.";
+      if (cpStatus) cpStatus.textContent = "";
+      return;
+    }
+    if (newPass !== confirmPass) {
+      if (cpError) cpError.textContent = "Passwords do not match.";
+      if (cpStatus) cpStatus.textContent = "";
+      return;
+    }
+    try {
+      await api("/api/password/update", {
+        method: "POST",
+        body: JSON.stringify({
+          email: cpTargetEmail,
+          verificationToken: cpVerificationToken,
+          newPassword: newPass
+        })
+      });
+      alert("Password updated successfully! Please log in with your new password.");
+      closeChangePasswordModal();
+      showAuth();
+    } catch (err) {
+      if (cpError) cpError.textContent = err.message || "Failed to update password.";
+      if (cpStatus) cpStatus.textContent = "";
+    }
+  });
+}
+
 function storeSession(data) {
   token = data.token;
   email = data.email;
@@ -251,9 +389,55 @@ function showChat() {
   startUsersRefresh();
 }
 
-// dark mode removed — no-op placeholder
 function applyTheme(theme) {
-  return;
+  const t = theme || localStorage.getItem('theme') || 'system';
+  let effective = t;
+  if (t === 'system') {
+    effective = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  if (effective === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+  localStorage.setItem('theme', t);
+}
+
+// Initial theme load
+applyTheme();
+
+function applyWallpaper(wallpaper) {
+  const wp = wallpaper || localStorage.getItem('chatWallpaper') || 'default';
+  const messagesList = document.getElementById('messagesList');
+  if (messagesList) {
+    messagesList.setAttribute('data-wallpaper', wp);
+  }
+  localStorage.setItem('chatWallpaper', wp);
+}
+
+// Initial wallpaper load
+applyWallpaper();
+
+const headerWallpaperBtn = document.getElementById('headerWallpaperBtn');
+if (headerWallpaperBtn) {
+  headerWallpaperBtn.addEventListener('click', () => {
+    const wallpapers = ['default', 'emerald', 'dark-slate', 'soft-sand', 'cyber-night', 'sky-blue'];
+    const current = localStorage.getItem('chatWallpaper') || 'default';
+    const idx = wallpapers.indexOf(current);
+    const next = wallpapers[(idx + 1) % wallpapers.length];
+    applyWallpaper(next);
+    const ppWallpaperSelect = document.getElementById('ppWallpaperSelect');
+    if (ppWallpaperSelect) ppWallpaperSelect.value = next;
+  });
+}
+
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    const savedTheme = localStorage.getItem('theme') || 'system';
+    if (savedTheme === 'system') {
+      applyTheme('system');
+    }
+  });
 }
 
 function showProfileDetails(prefill) {
@@ -265,6 +449,86 @@ function showProfileDetails(prefill) {
   pdDisplayName.value = prefill || displayName || "";
 }
 
+const welcomeLandingView = document.getElementById('welcomeLandingView');
+const welcomeStartBtn = document.getElementById('welcomeStartBtn');
+
+function showWelcomeLanding() {
+  if (welcomeLandingView) {
+    welcomeLandingView.classList.remove('hidden', 'fade-out');
+  }
+  if (authView) authView.classList.add('hidden');
+  if (chatView) chatView.classList.add('hidden');
+}
+
+function hideWelcomeLanding() {
+  if (welcomeLandingView) {
+    welcomeLandingView.classList.add('fade-out');
+    setTimeout(() => {
+      welcomeLandingView.classList.add('hidden');
+    }, 400);
+  }
+}
+
+if (welcomeStartBtn) {
+  welcomeStartBtn.addEventListener('click', () => {
+    hideWelcomeLanding();
+    setTimeout(() => {
+      showAuth();
+    }, 150);
+  });
+}
+
+// Restore a saved session before showing the welcome screen. This prevents a
+// signed-in user from being sent back through the landing animation on refresh.
+async function restoreSession() {
+  if (!token || !email) {
+    showWelcomeLanding();
+    return;
+  }
+
+  const payload = parseJwtPayload(token);
+  if (payload && payload.exp && payload.exp * 1000 <= Date.now()) {
+    clearSession();
+    showWelcomeLanding();
+    return;
+  }
+
+  // Render the saved session immediately, then confirm it with the server.
+  if (welcomeLandingView) welcomeLandingView.classList.add('hidden');
+  showChat();
+
+  try {
+    const account = await api('/api/me');
+    email = account.email || email;
+    displayName = account.displayName || displayName;
+    localStorage.setItem('chatEmail', email);
+    localStorage.setItem('chatDisplayName', displayName);
+    if (account.profilePicture) localStorage.setItem('chatProfilePicture', account.profilePicture);
+
+    if (!displayName.trim()) {
+      hideProfileDetails();
+      showProfileDetails('');
+      return;
+    }
+
+    // Refresh the header with the verified account details.
+    currentUser.textContent = displayName;
+    currentEmail.textContent = email;
+    menuDisplayName.textContent = displayName;
+    menuEmail.textContent = email;
+  } catch (error) {
+    // A 401 means the token is no longer usable. Network/server failures do
+    // not log the user out unnecessarily; the already-rendered chat stays on screen.
+    if (error && /please log in|unauthorized|token/i.test(error.message || '')) {
+      clearSession();
+      if (chatView) chatView.classList.add('hidden');
+      showWelcomeLanding();
+    }
+  }
+}
+
+restoreSession();
+
 function hideProfileDetails() {
   profileDetailsView.classList.add("hidden");
 }
@@ -273,6 +537,7 @@ function showAuth() {
   disconnectSocket();
   stopUsersRefresh();
   clearSession();
+  if (welcomeLandingView) welcomeLandingView.classList.add('hidden');
   authView.classList.remove("hidden");
   chatView.classList.add("hidden");
   setAuthMode("login");
@@ -280,8 +545,8 @@ function showAuth() {
 
 function startUsersRefresh() {
   stopUsersRefresh();
-  loadUsers();
-  usersTimer = setInterval(loadUsers, 15000);
+  loadRecentChats();
+  usersTimer = setInterval(loadRecentChats, 15000);
 }
 
 function stopUsersRefresh() {
@@ -311,7 +576,7 @@ async function connectSocket() {
 
     socket.on("connect", () => {
       chatError.textContent = "";
-      loadUsers();
+      loadRecentChats();
     });
 
     socket.on("connect_error", (error) => {
@@ -320,17 +585,41 @@ async function connectSocket() {
       // Do not log the user out on socket errors.
     });
 
-    socket.on("users:update", loadUsers);
+    socket.on("users:update", loadRecentChats);
     socket.on("private:message", handleSocketMessage);
-    socket.on("typing", (payload) => {
-      if (!payload || !payload.from) return;
-      // show typing only when from selected user
-      if (selectedUser && payload.from === selectedUser.email) {
-        chatStatus.textContent = "Typing...";
-        setTimeout(() => {
-          chatStatus.textContent = selectedUser.online ? "Online" : "Offline";
-        }, 1800);
-      }
+    socket.on('typing:start', (payload) => {
+      try {
+        if (!payload || !payload.from) return;
+        const el = document.getElementById('typingIndicator');
+        if (selectedUser && payload.from === selectedUser.email && el) {
+          el.textContent = payload.text || `${selectedUser.displayName} is typing...`;
+        }
+      } catch (e) {}
+    });
+    socket.on('typing:stop', (payload) => {
+      try {
+        if (!payload || !payload.from) return;
+        const el = document.getElementById('typingIndicator');
+        if (selectedUser && payload.from === selectedUser.email && el) {
+          el.textContent = '';
+        }
+      } catch (e) {}
+    });
+
+    socket.on('message:delivered', (payload) => {
+      try { updateMessageReceipt(payload.id, 'delivered'); } catch (e) {}
+    });
+
+    socket.on('message:seen', (payload) => {
+      try { updateMessageReceipt(payload.id, 'seen'); } catch (e) {}
+    });
+
+    socket.on('message:reaction', (payload) => {
+      try { updateMessageReactions(payload.id, payload.reactions); } catch (e) {}
+    });
+
+    socket.on('voice:uploaded', (payload) => {
+      try { updateVoiceMessage(payload.id, payload.audioUrl, payload.audioDuration); } catch (e) {}
     });
   } catch (err) {
     console.error("connectSocket unexpected error:", err && err.message);
@@ -339,7 +628,7 @@ async function connectSocket() {
 
 function disconnectSocket() {
   if (!socket) return;
-  socket.off("users:update", loadUsers);
+  socket.off("users:update", loadRecentChats);
   socket.off("private:message", handleSocketMessage);
   socket.disconnect();
   socket = null;
@@ -365,8 +654,8 @@ async function setChatTarget(user) {
   }
 
   await loadMessages();
-  // refresh user list to clear badge
-  await loadUsers();
+  // refresh recent chats to clear badge
+  await loadRecentChats();
   renderActiveUser();
   messageInput.focus();
 }
@@ -386,36 +675,33 @@ function getInitials(name) {
     .join("");
 }
 
-function renderUsers(users) {
-  usersCache = users || [];
-  const q = (document.getElementById('usersSearchInput') && document.getElementById('usersSearchInput').value || '').toLowerCase().trim();
-  const filtered = usersCache.filter(u => !q || (u.displayName && u.displayName.toLowerCase().includes(q)) || (u.email && u.email.toLowerCase().includes(q)));
-  usersList.innerHTML = "";
-
-  if (!filtered.length) {
-    const empty = document.createElement("div");
-    empty.className = "small-empty";
-    empty.textContent = "No other accounts yet.";
-    usersList.appendChild(empty);
+function renderRecentChats(list) {
+  recentChatsCache = list || [];
+  recentChatsList.innerHTML = '';
+  if (!recentChatsCache.length) {
+    const empty = document.createElement('div');
+    empty.className = 'small-empty';
+    empty.textContent = 'No recent chats yet.';
+    recentChatsList.appendChild(empty);
     return;
   }
 
-  filtered.forEach((user) => {
-    const button = document.createElement("button");
-    const avatar = document.createElement("span");
-    const copy = document.createElement("span");
-    const name = document.createElement("strong");
-    const mail = document.createElement("small");
-    const presence = document.createElement("i");
-    const last = document.createElement("small");
+  recentChatsCache.forEach((user) => {
+    const button = document.createElement('button');
+    const avatar = document.createElement('span');
+    const copy = document.createElement('span');
+    const name = document.createElement('strong');
+    const mail = document.createElement('small');
+    const presence = document.createElement('i');
+    const last = document.createElement('small');
+    const lastMsg = document.createElement('div');
 
-    // Ensure we always have a visible label to display/search
     const display = (user.displayName && String(user.displayName).trim()) || user.email || 'User';
 
-    button.type = "button";
-    button.className = "user-button";
+    button.type = 'button';
+    button.className = 'user-button';
     button.dataset.email = user.email;
-    avatar.className = "avatar";
+    avatar.className = 'avatar';
     if (user.profilePicture) {
       const img = document.createElement('img');
       img.src = user.profilePicture;
@@ -425,18 +711,26 @@ function renderUsers(users) {
     } else {
       avatar.textContent = getInitials(display);
     }
-    copy.className = "user-copy";
+
+    copy.className = 'user-copy';
     name.textContent = display;
     mail.textContent = user.email;
-    presence.className = `presence ${user.online ? "online" : "offline"}`;
-    presence.setAttribute("aria-label", user.online ? "Online" : "Offline");
-    // last seen text
+    presence.className = `presence ${user.online ? 'online' : 'offline'}`;
+    presence.setAttribute('aria-label', user.online ? 'Online' : 'Offline');
+
     last.className = 'last-seen';
-    if (user.online) last.textContent = 'Online';
-    else last.textContent = formatLastSeen(user.lastSeen);
+    if (user.lastMessageTime) {
+      const d = new Date(user.lastMessageTime);
+      last.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else if (user.lastSeen) {
+      last.textContent = formatLastSeen(user.lastSeen);
+    }
+
+    lastMsg.className = 'last-message';
+    if (user.lastMessageText) lastMsg.textContent = user.lastMessageText.slice(0, 80);
 
     copy.append(name, mail, last);
-    // unread badge
+
     const unread = document.createElement('span');
     unread.className = 'unread';
     if (user.unreadCount && Number(user.unreadCount) > 0) {
@@ -445,18 +739,79 @@ function renderUsers(users) {
     } else {
       unread.style.display = 'none';
     }
+
     button.append(avatar, copy, presence, unread);
-    button.addEventListener("click", () => setChatTarget(user));
-    usersList.appendChild(button);
+    button.addEventListener('click', () => setChatTarget(user));
+    recentChatsList.appendChild(button);
   });
 
   if (selectedUser) {
-    const updatedSelected = usersCache.find((user) => user.email === selectedUser.email);
-    if (updatedSelected) {
-      selectedUser = updatedSelected;
-      chatStatus.textContent = selectedUser.online ? "Online" : "Offline";
+    const updated = recentChatsCache.find((u) => u.email === selectedUser.email);
+    if (updated) {
+      selectedUser = updated;
+      chatStatus.textContent = selectedUser.online ? 'Online' : 'Offline';
     }
   }
+
+  renderActiveUser();
+}
+
+function renderSearchResults(list) {
+  searchCache = list || [];
+  searchResultsList.innerHTML = '';
+  if (!searchCache.length) {
+    const empty = document.createElement('div');
+    empty.className = 'small-empty';
+    empty.textContent = 'No matching users.';
+    searchResultsList.appendChild(empty);
+    return;
+  }
+
+  searchCache.forEach((user) => {
+    const button = document.createElement('button');
+    const avatar = document.createElement('span');
+    const copy = document.createElement('span');
+    const name = document.createElement('strong');
+    const mail = document.createElement('small');
+    const presence = document.createElement('i');
+
+    const display = (user.displayName && String(user.displayName).trim()) || user.email || 'User';
+
+    button.type = 'button';
+    button.className = 'user-button';
+    button.dataset.email = user.email;
+    avatar.className = 'avatar';
+    if (user.profilePicture) {
+      const img = document.createElement('img');
+      img.src = user.profilePicture;
+      img.alt = display;
+      img.className = 'avatar-img';
+      avatar.appendChild(img);
+    } else {
+      avatar.textContent = getInitials(display);
+    }
+
+    copy.className = 'user-copy';
+    name.textContent = display;
+    mail.textContent = user.email;
+    presence.className = `presence ${user.online ? 'online' : 'offline'}`;
+    presence.setAttribute('aria-label', user.online ? 'Online' : 'Offline');
+
+    copy.append(name, mail);
+
+    const unread = document.createElement('span');
+    unread.className = 'unread';
+    if (user.unreadCount && Number(user.unreadCount) > 0) {
+      unread.textContent = String(user.unreadCount);
+      unread.style.display = '';
+    } else {
+      unread.style.display = 'none';
+    }
+
+    button.append(avatar, copy, presence, unread);
+    button.addEventListener('click', () => setChatTarget(user));
+    searchResultsList.appendChild(button);
+  });
 
   renderActiveUser();
 }
@@ -464,10 +819,111 @@ function renderUsers(users) {
 function renderMessage(message) {
   const item = document.createElement('article');
   item.className = `message ${message.fromEmail === email ? 'mine' : ''}`;
+  item.dataset.id = message.id;
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.textContent = message.text;
+  if (message.text) bubble.textContent = message.text;
+
+  // Custom WhatsApp-Style Voice Message Player
+  if (message.audioUrl) {
+    const player = document.createElement('div');
+    player.className = 'custom-voice-player';
+    
+    const playBtn = document.createElement('button');
+    playBtn.type = 'button';
+    playBtn.className = 'voice-play-btn';
+    playBtn.innerHTML = '▶';
+    playBtn.title = 'Play voice message';
+    
+    const track = document.createElement('div');
+    track.className = 'voice-track';
+    
+    const waveform = document.createElement('div');
+    waveform.className = 'voice-waveform';
+    for (let i = 0; i < 14; i++) {
+      const bar = document.createElement('span');
+      bar.className = 'wave-bar';
+      waveform.appendChild(bar);
+    }
+    
+    const progressContainer = document.createElement('div');
+    progressContainer.className = 'voice-progress-container';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'voice-progress-bar';
+    progressContainer.appendChild(progressBar);
+    
+    track.append(waveform, progressContainer);
+    
+    const durationSpan = document.createElement('span');
+    durationSpan.className = 'voice-duration';
+    const initialDur = message.audioDuration ? Math.round(message.audioDuration / 1000) : 0;
+    durationSpan.textContent = initialDur > 0 ? `${Math.floor(initialDur/60)}:${String(initialDur%60).padStart(2,'0')}` : '0:00';
+    
+    const hiddenAudio = document.createElement('audio');
+    hiddenAudio.src = message.audioUrl && message.audioUrl.startsWith('http') ? message.audioUrl : `${API_BASE_URL.replace(/\/$/, '')}${message.audioUrl}`;
+    hiddenAudio.preload = 'metadata';
+    
+    hiddenAudio.addEventListener('loadedmetadata', () => {
+      if (hiddenAudio.duration && isFinite(hiddenAudio.duration)) {
+        const dur = Math.round(hiddenAudio.duration);
+        durationSpan.textContent = `${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}`;
+      }
+    });
+    
+    hiddenAudio.addEventListener('timeupdate', () => {
+      if (hiddenAudio.duration && isFinite(hiddenAudio.duration)) {
+        const pct = (hiddenAudio.currentTime / hiddenAudio.duration) * 100;
+        progressBar.style.width = `${pct}%`;
+        const rem = Math.round(hiddenAudio.duration - hiddenAudio.currentTime);
+        durationSpan.textContent = `${Math.floor(rem/60)}:${String(rem%60).padStart(2,'0')}`;
+      }
+    });
+    
+    hiddenAudio.addEventListener('play', () => {
+      player.classList.add('playing');
+      playBtn.innerHTML = '❚❚';
+    });
+    
+    hiddenAudio.addEventListener('pause', () => {
+      player.classList.remove('playing');
+      playBtn.innerHTML = '▶';
+    });
+    
+    hiddenAudio.addEventListener('ended', () => {
+      player.classList.remove('playing');
+      playBtn.innerHTML = '▶';
+      progressBar.style.width = '0%';
+      if (hiddenAudio.duration && isFinite(hiddenAudio.duration)) {
+        const dur = Math.round(hiddenAudio.duration);
+        durationSpan.textContent = `${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}`;
+      }
+    });
+    
+    playBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('audio').forEach(a => {
+        if (a !== hiddenAudio) a.pause();
+      });
+      if (hiddenAudio.paused) {
+        hiddenAudio.play().catch(console.error);
+      } else {
+        hiddenAudio.pause();
+      }
+    });
+    
+    progressContainer.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (hiddenAudio.duration && isFinite(hiddenAudio.duration)) {
+        const rect = progressContainer.getBoundingClientRect();
+        const pos = (e.clientX - rect.left) / rect.width;
+        hiddenAudio.currentTime = pos * hiddenAudio.duration;
+      }
+    });
+    
+    player.append(playBtn, track, durationSpan, hiddenAudio);
+    bubble.appendChild(player);
+  }
 
   const meta = document.createElement('div');
   meta.className = 'meta';
@@ -478,10 +934,150 @@ function renderMessage(message) {
   const showDate = now - ts.getTime() > day;
   meta.textContent = `${message.fromName} • ${time}${showDate ? ' • ' + ts.toLocaleDateString() : ''}`;
 
-  item.append(bubble, meta);
+  // receipt placeholder
+  const receipt = document.createElement('span');
+  receipt.className = 'receipt';
+  receipt.style.marginLeft = '8px';
+  if (message.status === 'delivered') receipt.textContent = '✓✓';
+  else if (message.status === 'seen') receipt.textContent = '✓✓';
+  else receipt.textContent = '✓';
+  meta.appendChild(receipt);
+
+  const bubbleRow = document.createElement('div');
+  bubbleRow.className = 'bubble-row';
+
+  // Reaction trigger button & floating picker
+  const triggerBtn = document.createElement('button');
+  triggerBtn.type = 'button';
+  triggerBtn.className = 'react-trigger-btn';
+  triggerBtn.innerHTML = '😊';
+  triggerBtn.title = 'Add reaction';
+
+  const picker = createReactionPicker(message.id);
+
+  triggerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.querySelectorAll('.reaction-picker').forEach(p => {
+      if (p !== picker) p.classList.add('hidden');
+    });
+    if (messagesList) {
+      const btnRect = triggerBtn.getBoundingClientRect();
+      const listRect = messagesList.getBoundingClientRect();
+      if (btnRect.top - listRect.top < 65) {
+        picker.classList.add('position-bottom');
+      } else {
+        picker.classList.remove('position-bottom');
+      }
+    }
+    picker.classList.toggle('hidden');
+  });
+
+  bubbleRow.append(bubble, triggerBtn, picker);
+
+  // Initial reactions badges on bubble
+  if (message.reactions) {
+    updateMessageReactions(message.id, message.reactions);
+  }
+
+  item.append(bubbleRow, meta);
   messagesList.appendChild(item);
   // auto scroll to latest
   messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+// Supported WhatsApp-style reactions
+const SUPPORTED_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+function createReactionPicker(messageId) {
+  const picker = document.createElement('div');
+  picker.className = 'reaction-picker hidden';
+  
+  SUPPORTED_REACTIONS.forEach((emoji) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'reaction-emoji-btn';
+    btn.textContent = emoji;
+    btn.title = `React with ${emoji}`;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try {
+        if (socket) socket.emit('message:reaction', { id: messageId, reaction: emoji });
+      } catch (err) {}
+      picker.classList.add('hidden');
+    });
+    picker.appendChild(btn);
+  });
+  
+  return picker;
+}
+
+function updateMessageReceipt(id, status) {
+  const el = messagesList.querySelector(`article[data-id="${id}"]`);
+  if (!el) return;
+  const receipt = el.querySelector('.receipt');
+  if (!receipt) return;
+  if (status === 'delivered') receipt.textContent = '✓✓';
+  if (status === 'seen') receipt.textContent = '✓✓';
+}
+
+function updateMessageReactions(id, reactions) {
+  const el = messagesList.querySelector(`article[data-id="${id}"]`);
+  if (!el) return;
+  const bubble = el.querySelector('.bubble');
+  if (!bubble) return;
+
+  let badgesContainer = bubble.querySelector('.reaction-badges');
+  if (!badgesContainer) {
+    badgesContainer = document.createElement('div');
+    badgesContainer.className = 'reaction-badges';
+    bubble.appendChild(badgesContainer);
+  }
+  
+  badgesContainer.innerHTML = '';
+  const current = reactions || {};
+  let totalReactions = 0;
+
+  SUPPORTED_REACTIONS.forEach((emoji) => {
+    const users = current[emoji] || [];
+    if (users.length > 0) {
+      totalReactions += users.length;
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      const hasReacted = users.includes(email);
+      pill.className = `reaction-badge-pill ${hasReacted ? 'user-reacted' : ''}`;
+      pill.title = users.join(', ');
+      
+      const emojiSpan = document.createElement('span');
+      emojiSpan.textContent = emoji;
+      pill.appendChild(emojiSpan);
+      
+      if (users.length > 1) {
+        const countSpan = document.createElement('span');
+        countSpan.className = 'badge-count';
+        countSpan.textContent = users.length;
+        pill.appendChild(countSpan);
+      }
+      
+      pill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        try {
+          if (socket) socket.emit('message:reaction', { id, reaction: emoji });
+        } catch (err) {}
+      });
+      badgesContainer.appendChild(pill);
+    }
+  });
+
+  if (totalReactions === 0) {
+    badgesContainer.remove();
+  }
+}
+
+function updateVoiceMessage(id, audioUrl, audioDuration) {
+  const el = messagesList.querySelector(`article[data-id=\"${id}\"]`);
+  if (!el) return;
+  const audioEl = el.querySelector('audio');
+  if (audioEl) audioEl.src = audioUrl && audioUrl.startsWith('http') ? audioUrl : `${API_BASE_URL.replace(/\/$/, '')}${audioUrl}`;
 }
 
 function isSelectedConversation(message) {
@@ -512,8 +1108,12 @@ function formatLastSeen(ts) {
 
 function handleSocketMessage(message) {
   // If message is for current user and not the active conversation, increment unread locally
-  if (message.toEmail === email && (!selectedUser || selectedUser.email !== message.fromEmail)) {
-    incrementLocalUnread(message.fromEmail);
+  if (message.toEmail === email) {
+    // acknowledge delivery
+    try { socket && socket.emit('message:delivered', { id: message.id }); } catch (e) {}
+    if (!selectedUser || selectedUser.email !== message.fromEmail) {
+      incrementLocalUnread(message.fromEmail);
+    }
   }
 
   if (!isSelectedConversation(message) || message.id <= lastMessageId) return;
@@ -532,14 +1132,29 @@ function incrementLocalUnread(fromEmail) {
   badge.style.display = '';
 }
 
-async function loadUsers() {
+async function loadRecentChats() {
   try {
-    const data = await api("/api/users");
-    console.log('DEBUG /api/users response:', data.users);
-    renderUsers(data.users);
+    const data = await api('/api/recent-chats');
+    renderRecentChats(data.recentChats || []);
+    // show recent chats and hide search results
+    if (recentChatsList) recentChatsList.style.display = '';
+    if (searchResultsList) searchResultsList.style.display = 'none';
   } catch (error) {
     chatError.textContent = error.message;
-    if (error.message.includes("log in")) showAuth();
+    if (error.message.includes('log in')) showAuth();
+  }
+}
+
+async function searchUsers(q) {
+  try {
+    if (!q || !q.trim()) return;
+    const data = await api(`/api/users/search?q=${encodeURIComponent(q)}`);
+    renderSearchResults(data.users || []);
+    if (recentChatsList) recentChatsList.style.display = 'none';
+    if (searchResultsList) searchResultsList.style.display = '';
+  } catch (error) {
+    chatError.textContent = error.message;
+    if (error.message.includes('log in')) showAuth();
   }
 }
 
@@ -550,10 +1165,19 @@ async function loadMessages() {
     const data = await api(
       `/api/messages?with=${encodeURIComponent(selectedUser.email)}&after=${lastMessageId}`
     );
+    const toMarkSeen = [];
     data.messages.forEach((message) => {
       renderMessage(message);
       lastMessageId = Math.max(lastMessageId, message.id);
+      // if this client is recipient and message not seen yet, mark for seen
+      if (message.toEmail === email && message.status !== 'seen') {
+        toMarkSeen.push(message.id);
+      }
     });
+
+    if (toMarkSeen.length && socket && socket.connected) {
+      try { socket.emit('message:seen', { ids: toMarkSeen }); } catch (e) {}
+    }
   } catch (error) {
     chatError.textContent = error.message;
   }
@@ -688,128 +1312,160 @@ profileButton.addEventListener("click", (e) => {
 document.addEventListener("click", () => profileMenu.classList.add("hidden"));
 profileMenu.addEventListener("click", (e) => e.stopPropagation());
 
-menuLogoutBtn.addEventListener("click", async () => {
-  try {
-    await api("/api/logout", { method: "POST" });
-  } finally {
-    showAuth();
-  }
-});
+if (menuLogoutBtn) {
+  menuLogoutBtn.addEventListener("click", async () => {
+    try {
+      await api("/api/logout", { method: "POST" });
+    } finally {
+      showAuth();
+    }
+  });
+}
 
 changePasswordBtn.addEventListener("click", () => {
   openChangePasswordModal();
   profileMenu.classList.add("hidden");
 });
 
-function openChangePasswordModal() {
+function openChangePasswordModal(prefillEmail) {
   cpVerificationToken = "";
-  cpCurrentPassword.value = "";
-  cpOtpInput.value = "";
-  cpNewPassword.value = "";
-  cpConfirmNewPassword.value = "";
-  cpStatus.textContent = "";
-  cpError.textContent = "";
-  // show only current password step
+  cpTargetEmail = (prefillEmail && String(prefillEmail).trim()) || email || (loginEmailInput ? loginEmailInput.value.trim() : "") || "";
+  if (cpEmailInput) cpEmailInput.value = cpTargetEmail;
+  if (cpOtpInput) cpOtpInput.value = "";
+  if (cpNewPassword) cpNewPassword.value = "";
+  if (cpConfirmNewPassword) cpConfirmNewPassword.value = "";
+  if (cpStatus) cpStatus.textContent = "";
+  if (cpError) cpError.textContent = "";
   document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
   document.querySelector("#cpStepCurrent").classList.remove("hidden");
-  changePasswordModal.classList.remove("hidden");
+  if (changePasswordModal) changePasswordModal.classList.remove("hidden");
+  if (cpEmailInput && !cpEmailInput.value) cpEmailInput.focus();
 }
 
 function closeChangePasswordModal() {
-  changePasswordModal.classList.add("hidden");
+  if (changePasswordModal) changePasswordModal.classList.add("hidden");
 }
 
-cpCancelBtn.addEventListener("click", closeChangePasswordModal);
-closeChangePassword.addEventListener("click", closeChangePasswordModal);
+if (cpCancelBtn) cpCancelBtn.addEventListener("click", closeChangePasswordModal);
+if (closeChangePassword) closeChangePassword.addEventListener("click", closeChangePasswordModal);
 
-// Send OTP (requires current password validation on server)
-cpSendOtpButton.addEventListener("click", async () => {
-  cpError.textContent = "";
-  cpStatus.textContent = "Sending OTP...";
-  cpSendOtpButton.disabled = true;
-  try {
-    const data = await api("/api/password/send-otp", {
-      method: "POST",
-      body: JSON.stringify({ currentPassword: cpCurrentPassword.value }),
-    });
-    cpStatus.textContent = "OTP sent to your email.";
-    // show OTP step
-    document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
-    document.querySelector("#cpStepOtp").classList.remove("hidden");
-    cpOtpInput.focus();
-  } catch (err) {
-    cpError.textContent = err.message;
-    cpStatus.textContent = "";
-  } finally {
-    cpSendOtpButton.disabled = false;
-  }
-});
+if (loginForgotPasswordBtn) {
+  loginForgotPasswordBtn.addEventListener("click", () => {
+    const prefill = loginEmailInput ? loginEmailInput.value.trim() : "";
+    openChangePasswordModal(prefill);
+  });
+}
 
-cpResendOtpButton.addEventListener("click", async () => {
-  cpError.textContent = "";
-  cpStatus.textContent = "Resending OTP...";
-  cpResendOtpButton.disabled = true;
-  try {
-    await api("/api/password/send-otp", {
-      method: "POST",
-      body: JSON.stringify({ currentPassword: cpCurrentPassword.value }),
-    });
-    cpStatus.textContent = "OTP resent.";
-    cpOtpInput.focus();
-  } catch (err) {
-    cpError.textContent = err.message;
-    cpStatus.textContent = "";
-  } finally {
-    cpResendOtpButton.disabled = false;
-  }
-});
+// Send OTP
+if (cpSendOtpButton) {
+  cpSendOtpButton.addEventListener("click", async () => {
+    cpError.textContent = "";
+    const targetEmail = (cpEmailInput ? cpEmailInput.value.trim().toLowerCase() : cpTargetEmail) || email;
+    if (!targetEmail) {
+      cpError.textContent = "Please enter your email address.";
+      return;
+    }
+    cpTargetEmail = targetEmail;
+    cpStatus.textContent = "Sending verification code...";
+    cpSendOtpButton.disabled = true;
+    try {
+      await api("/api/password/send-otp", {
+        method: "POST",
+        body: JSON.stringify({ email: targetEmail }),
+      });
+      cpStatus.textContent = `Verification code sent to ${targetEmail}.`;
+      document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
+      document.querySelector("#cpStepOtp").classList.remove("hidden");
+      if (cpOtpInput) cpOtpInput.focus();
+    } catch (err) {
+      cpError.textContent = err.message;
+      cpStatus.textContent = "";
+    } finally {
+      cpSendOtpButton.disabled = false;
+    }
+  });
+}
+
+if (cpResendOtpButton) {
+  cpResendOtpButton.addEventListener("click", async () => {
+    cpError.textContent = "";
+    const targetEmail = cpTargetEmail || (cpEmailInput ? cpEmailInput.value.trim().toLowerCase() : email);
+    if (!targetEmail) return;
+    cpStatus.textContent = "Resending code...";
+    cpResendOtpButton.disabled = true;
+    try {
+      await api("/api/password/send-otp", {
+        method: "POST",
+        body: JSON.stringify({ email: targetEmail }),
+      });
+      cpStatus.textContent = "Verification code resent.";
+      if (cpOtpInput) cpOtpInput.focus();
+    } catch (err) {
+      cpError.textContent = err.message;
+      cpStatus.textContent = "";
+    } finally {
+      cpResendOtpButton.disabled = false;
+    }
+  });
+}
 
 // Verify OTP
-cpVerifyOtpButton.addEventListener("click", async () => {
-  cpError.textContent = "";
-  cpStatus.textContent = "Verifying code...";
-  cpVerifyOtpButton.disabled = true;
-  try {
-    const data = await api("/api/password/verify-otp", {
-      method: "POST",
-      body: JSON.stringify({ email, otp: cpOtpInput.value }),
-    });
-    cpVerificationToken = data.verificationToken;
-    cpStatus.textContent = "Code verified. Enter a new password.";
-    document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
-    document.querySelector("#cpStepNew").classList.remove("hidden");
-    cpNewPassword.focus();
-  } catch (err) {
-    cpError.textContent = err.message;
-    cpStatus.textContent = "";
-  } finally {
-    cpVerifyOtpButton.disabled = false;
-  }
-});
+if (cpVerifyOtpButton) {
+  cpVerifyOtpButton.addEventListener("click", async () => {
+    cpError.textContent = "";
+    const targetEmail = cpTargetEmail || (cpEmailInput ? cpEmailInput.value.trim().toLowerCase() : email);
+    const otpVal = cpOtpInput ? cpOtpInput.value.trim() : "";
+    if (!targetEmail || !otpVal) {
+      cpError.textContent = "Please enter the 6-digit verification code.";
+      return;
+    }
+    cpStatus.textContent = "Verifying code...";
+    cpVerifyOtpButton.disabled = true;
+    try {
+      const data = await api("/api/password/verify-otp", {
+        method: "POST",
+        body: JSON.stringify({ email: targetEmail, otp: otpVal }),
+      });
+      cpVerificationToken = data.verificationToken;
+      cpStatus.textContent = "Code verified. Enter a new password.";
+      document.querySelectorAll("#cpStepCurrent, #cpStepOtp, #cpStepNew").forEach((el) => el.classList.add("hidden"));
+      document.querySelector("#cpStepNew").classList.remove("hidden");
+      if (cpNewPassword) cpNewPassword.focus();
+    } catch (err) {
+      cpError.textContent = err.message;
+      cpStatus.textContent = "";
+    } finally {
+      cpVerifyOtpButton.disabled = false;
+    }
+  });
+}
 
 // Update password
-cpUpdateButton.addEventListener("click", async () => {
-  cpError.textContent = "";
-  if (cpNewPassword.value !== cpConfirmNewPassword.value) {
-    cpError.textContent = "Passwords do not match.";
-    return;
-  }
-  cpStatus.textContent = "Updating Password...";
-  cpUpdateButton.disabled = true;
-  try {
-    await api("/api/password/update", {
-      method: "POST",
-      body: JSON.stringify({ verificationToken: cpVerificationToken, password: cpNewPassword.value }),
-    });
-    cpStatus.textContent = "Password updated successfully.";
-    setTimeout(() => closeChangePasswordModal(), 900);
-  } catch (err) {
-    cpError.textContent = err.message;
-    cpStatus.textContent = "";
-  } finally {
-    cpUpdateButton.disabled = false;
-  }
-});
+if (cpUpdateButton) {
+  cpUpdateButton.addEventListener("click", async () => {
+    cpError.textContent = "";
+    if (!cpNewPassword || !cpConfirmNewPassword) return;
+    if (cpNewPassword.value !== cpConfirmNewPassword.value) {
+      cpError.textContent = "Passwords do not match.";
+      return;
+    }
+    cpStatus.textContent = "Updating password...";
+    cpUpdateButton.disabled = true;
+    try {
+      await api("/api/password/update", {
+        method: "POST",
+        body: JSON.stringify({ verificationToken: cpVerificationToken, password: cpNewPassword.value }),
+      });
+      cpStatus.textContent = "Password updated successfully. You can now log in.";
+      setTimeout(() => closeChangePasswordModal(), 1200);
+    } catch (err) {
+      cpError.textContent = err.message;
+      cpStatus.textContent = "";
+    } finally {
+      cpUpdateButton.disabled = false;
+    }
+  });
+}
 
 messageForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -830,328 +1486,478 @@ messageForm.addEventListener("submit", (event) => {
   });
 });
 
-// typing indicator: emit when input changes
+// typing indicator: send throttled start/stop events when input changes
+let _typingThrottle = 0;
+let _typingTimer = null;
 messageInput.addEventListener('input', () => {
   if (!socket || !socket.connected || !selectedUser) return;
   try {
-    socket.emit('typing', { to: selectedUser.email });
+    const now = Date.now();
+    if (!_typingThrottle || now - _typingThrottle > 800) {
+      socket.emit('typing:start', { to: selectedUser.email });
+      _typingThrottle = now;
+    }
+    if (_typingTimer) clearTimeout(_typingTimer);
+    _typingTimer = setTimeout(() => {
+      try { socket.emit('typing:stop', { to: selectedUser.email }); } catch (e) {}
+      _typingThrottle = 0;
+    }, 2000);
   } catch (e) {}
 });
 
 // Search input handler
 const usersSearchInput = document.getElementById('usersSearchInput');
 if (usersSearchInput) {
+  let searchTimer = null;
   usersSearchInput.addEventListener('input', () => {
-    renderUsers(usersCache);
+    const q = usersSearchInput.value || '';
+    if (!q.trim()) {
+      // clear search results and show recent chats
+      if (searchResultsList) searchResultsList.innerHTML = '';
+      if (searchResultsList) searchResultsList.style.display = 'none';
+      if (recentChatsList) recentChatsList.style.display = '';
+      return;
+    }
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      searchUsers(q.trim());
+    }, 250);
   });
 }
 
-// Profile modal and actions
-const profileModal = document.getElementById('profileModal');
-const pmAvatar = document.getElementById('pmAvatar');
-const pmDisplayName = document.getElementById('pmDisplayName');
-const pmEmail = document.getElementById('pmEmail');
-const pmBio = document.getElementById('pmBio');
-const pmJoined = document.getElementById('pmJoined');
-const pmLastSeen = document.getElementById('pmLastSeen');
-const pmEditBtn = document.getElementById('pmEditBtn');
-const pmCloseBtn = document.getElementById('pmCloseBtn');
-const viewProfileBtn = document.getElementById('viewProfileBtn');
-const editProfileBtn = document.getElementById('editProfileBtn');
-// Preserve original modal body so we can restore after editing
-const originalProfileModalBodyHTML = profileModal && profileModal.querySelector('.modal-body') ? profileModal.querySelector('.modal-body').innerHTML : '';
-
-function closeProfileModal() {
-  profileModal.classList.add('hidden');
-}
-
-async function openProfileModal() {
+// Voice message recording
+const recordBtn = document.getElementById('recordBtn');
+let mediaRecorder = null;
+let mediaStream = null;
+let recordingStart = 0;
+let recordingTimer = null;
+async function startRecording() {
+  if (!selectedUser) { alert('Select a conversation first'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { alert('Recording not supported in this browser'); return; }
   try {
-    const data = await api('/api/me');
-    // Restore original modal content in case it was replaced by edit form
-    const panel = profileModal.querySelector('.modal-body');
-    if (originalProfileModalBodyHTML && panel) panel.innerHTML = originalProfileModalBodyHTML;
-
-    // Re-query elements inside restored panel
-    const pmAvatarEl = profileModal.querySelector('#pmAvatar');
-    const pmDisplayNameEl = profileModal.querySelector('#pmDisplayName');
-    const pmEmailEl = profileModal.querySelector('#pmEmail');
-    const pmBioEl = profileModal.querySelector('#pmBio');
-    const pmJoinedEl = profileModal.querySelector('#pmJoined');
-    const pmLastSeenEl = profileModal.querySelector('#pmLastSeen');
-    const pmEditBtnEl = profileModal.querySelector('#pmEditBtn');
-    const pmCloseBtnEl = profileModal.querySelector('#pmCloseBtn');
-
-    if (pmDisplayNameEl) pmDisplayNameEl.textContent = data.displayName || '';
-    if (pmEmailEl) pmEmailEl.textContent = data.email || '';
-    if (pmBioEl) pmBioEl.textContent = data.bio || '';
-    if (pmJoinedEl) pmJoinedEl.textContent = data.joinedAt ? `Joined ${new Date(data.joinedAt).toLocaleDateString()}` : '';
-    if (pmLastSeenEl) pmLastSeenEl.textContent = data.lastSeen ? `Last: ${new Date(data.lastSeen).toLocaleString()}` : '';
-    if (pmAvatarEl) {
-      if (data.profilePicture) pmAvatarEl.src = data.profilePicture;
-      else pmAvatarEl.src = '';
-    }
-
-    // Bind close and edit handlers for the restored elements
-    if (pmCloseBtnEl && !pmCloseBtnEl.dataset.bound) {
-      pmCloseBtnEl.addEventListener('click', () => { closeProfileModal(); showChat(); });
-      pmCloseBtnEl.dataset.bound = '1';
-    }
-    if (pmEditBtnEl && !pmEditBtnEl.dataset.bound) {
-      pmEditBtnEl.addEventListener('click', openProfileEdit);
-      pmEditBtnEl.dataset.bound = '1';
-    }
-
-    profileModal.classList.remove('hidden');
-  } catch (err) {
-    console.error('Failed to load profile', err);
-  }
-}
-
-// open modal from profile menu
-if (viewProfileBtn) {
-  viewProfileBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    profileMenu.classList.add('hidden');
-    openProfileModal();
-  });
-}
-
-if (pmCloseBtn) pmCloseBtn.addEventListener('click', () => { closeProfileModal(); showChat(); });
-
-// Edit profile inside modal
-async function openProfileEdit() {
-  // build an inline form
-  try {
-    const me = await api('/api/me');
-    const form = document.createElement('form');
-    form.className = 'profile-edit-form';
-    const fldName = document.createElement('label');
-    fldName.textContent = 'Display name';
-    const inpName = document.createElement('input');
-    inpName.name = 'displayName';
-    inpName.required = true;
-    inpName.value = me.displayName || '';
-    fldName.appendChild(inpName);
-
-    const fldBio = document.createElement('label');
-    fldBio.textContent = 'Bio';
-    const taBio = document.createElement('textarea');
-    taBio.name = 'bio';
-    taBio.value = me.bio || '';
-    fldBio.appendChild(taBio);
-
-    const fldAvatar = document.createElement('label');
-    fldAvatar.textContent = 'Avatar URL';
-    const inpAvatar = document.createElement('input');
-    inpAvatar.name = 'profilePicture';
-    inpAvatar.value = me.profilePicture || '';
-    fldAvatar.appendChild(inpAvatar);
-
-    // theme selection removed
-
-    const actions = document.createElement('div'); actions.className = 'form-actions';
-    const saveBtn = document.createElement('button'); saveBtn.type = 'submit'; saveBtn.textContent = 'Save';
-    const cancelBtn = document.createElement('button'); cancelBtn.type = 'button'; cancelBtn.className = 'cancel'; cancelBtn.textContent = 'Cancel';
-    actions.append(saveBtn, cancelBtn);
-
-    form.append(fldName, fldBio, fldAvatar, actions);
-    const panel = profileModal.querySelector('.modal-body');
-    panel.innerHTML = '';
-    panel.appendChild(form);
-    cancelBtn.addEventListener('click', () => { closeProfileModal(); showChat(); });
-    form.addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const body = {
-        displayName: inpName.value,
-        bio: taBio.value,
-        profilePicture: inpAvatar.value
-      };
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(mediaStream);
+    const chunks = [];
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = arrayBufferToBase64(arrayBuffer);
+      const duration = Date.now() - recordingStart;
       try {
-        const data = await api('/api/me/update', { method: 'POST', body: JSON.stringify(body) });
-        storeSession({ token: data.token, email: data.email, displayName: data.displayName, profilePicture: data.profilePicture });
-        displayName = data.displayName;
-        if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
-        // close modal and return to chat (home)
-        closeProfileModal();
-        showChat();
+        recordBtn.disabled = true;
+        const data = await api('/api/voice/upload', { method: 'POST', body: JSON.stringify({ to: selectedUser.email, audioBase64: base64, audioType: blob.type, duration }) });
+        // server will emit the created message via socket
       } catch (err) {
-        alert('Failed to save: ' + err.message);
+        alert('Upload failed: ' + (err && err.message));
+      } finally {
+        recordBtn.disabled = false;
       }
-    });
+      // cleanup
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      mediaRecorder = null;
+      recordingStart = 0;
+      if (recordingTimer) clearTimeout(recordingTimer);
+      recordBtn.textContent = '🎤';
+    };
+    mediaRecorder.start();
+    recordingStart = Date.now();
+    recordBtn.textContent = '⏺';
+    // auto-stop after 2 minutes
+    recordingTimer = setTimeout(() => {
+      try { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); } catch (e) {}
+    }, 120000);
   } catch (err) {
-    alert('Failed to load profile for edit');
+    alert('Could not start recording: ' + (err && err.message));
   }
 }
 
-// Bind initial pmEditBtn to the edit function if present
-if (pmEditBtn) pmEditBtn.addEventListener('click', openProfileEdit);
-
-// also bind the menu-level edit button to open the modal in edit mode
-if (editProfileBtn) {
-  editProfileBtn.addEventListener('click', (e) => { e.preventDefault(); profileMenu.classList.add('hidden'); const btn = document.getElementById('pmEditBtn'); if (btn) btn.click(); });
-}
-
-// Defensive binding: ensure profile menu actions are attached when menu is opened
-function bindProfileMenuActions() {
-  const v = document.getElementById('viewProfileBtn');
-  const ebtn = document.getElementById('editProfileBtn');
-  if (v && !v.dataset.bound) {
-    v.addEventListener('click', (ev) => { ev.preventDefault(); profileMenu.classList.add('hidden'); openProfileModal(); });
-    v.dataset.bound = '1';
-  }
-  if (ebtn && !ebtn.dataset.bound) {
-    ebtn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      profileMenu.classList.add('hidden');
-      // open modal first, then enter edit mode
-      openProfileModal().then(() => setTimeout(() => { const btn = document.getElementById('pmEditBtn'); if (btn) btn.click(); }, 60));
-    });
-    ebtn.dataset.bound = '1';
-  }
-}
-
-// Bind once on load
-bindProfileMenuActions();
-// Re-bind when toggling the profile menu
-profileButton.addEventListener('click', bindProfileMenuActions);
-
-// Bind mobile sidebar toggle
-if (logoMark) {
-  logoMark.addEventListener('click', () => { if (sidebarEl) sidebarEl.classList.toggle('open'); });
-}
-
-// Initialize session restore without treating transient network/server errors as auth failures.
-(async function initSession() {
-  console.log('[INIT] starting session restore', { tokenPresent: !!token, email });
-
-  if (!token || !email) {
-    console.log('[INIT] no token or email in localStorage — showing auth');
-    showAuth();
-    return;
-  }
-
-  const payload = parseJwtPayload(token);
-  console.log('[INIT] token payload', payload);
-
-  if (payload && payload.exp && payload.exp * 1000 < Date.now()) {
-    console.warn('[INIT] token expired locally — clearing session');
-    showAuth();
-    return;
-  }
-
-  // Attempt to validate token with server, but treat network/server errors as transient.
+function stopRecording() {
   try {
-    const res = await fetchWithStatus(`${API_BASE_URL}/api/me`, { headers: { Authorization: `Bearer ${token}` }, timeout: 7000 });
-    console.log('[INIT] /api/me response status=', res.status);
+    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  } catch (e) {}
+}
 
-    if (res.ok && res.data) {
-      email = res.data.email;
-      displayName = res.data.displayName;
-      localStorage.setItem('chatEmail', email);
-      localStorage.setItem('chatDisplayName', displayName);
-      if (displayName && String(displayName).trim()) {
-        showChat();
-      } else {
-        showProfileDetails(displayName || '');
-      }
-      return;
+function arrayBufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+if (recordBtn) {
+  let recording = false;
+  recordBtn.addEventListener('click', async () => {
+    if (!recording) {
+      recording = true;
+      await startRecording();
+      // flip state when recorder stops
+      const watch = setInterval(() => { if (!mediaRecorder) { recording = false; clearInterval(watch); } }, 300);
+    } else {
+      stopRecording();
     }
+  });
+}
 
-    if (res.status === 401) {
-      console.warn('[INIT] /api/me returned 401 — clearing session');
-      showAuth();
-      return;
-    }
+// Profile Page and actions
+const profilePage = document.getElementById('profilePage');
+const ppAvatarImg = document.getElementById('ppAvatarImg');
+const ppFileInput = document.getElementById('ppFileInput');
+const ppChooseBtn = document.getElementById('ppChooseBtn');
+const ppSavePhoto = document.getElementById('ppSavePhoto');
+const ppCancelPhoto = document.getElementById('ppCancelPhoto');
+const ppDisplayNameEl = document.getElementById('ppDisplayName');
+const ppEmailEl = document.getElementById('ppEmail');
+const ppStatusEl = document.getElementById('ppStatus');
+const ppBioEl = document.getElementById('ppBio');
+const ppTotalChats = document.getElementById('ppTotalChats');
+const ppTotalMessages = document.getElementById('ppTotalMessages');
+const ppSharedMediaCount = document.getElementById('ppSharedMediaCount');
+const ppJoinedEl = document.getElementById('ppJoined');
+const ppLastSeenEl = document.getElementById('ppLastSeen');
+const ppSettingsForm = document.getElementById('ppSettingsForm');
+const ppEditDisplayName = document.getElementById('ppEditDisplayName');
+const ppEditBio = document.getElementById('ppEditBio');
+const ppThemeSelect = document.getElementById('ppThemeSelect');
+const ppNotifEmail = document.getElementById('ppNotifEmail');
+const ppNotifPush = document.getElementById('ppNotifPush');
+const ppNotifSound = document.getElementById('ppNotifSound');
+const ppChangePassword = document.getElementById('ppChangePassword');
+const ppLogout = document.getElementById('ppLogout');
+const ppClose = document.getElementById('ppClose');
+let _ppSelectedImage = null;
 
-    // Non-auth errors (network timeout, 5xx, 0) — keep user signed in and treat as transient
-    console.warn('[INIT] /api/me returned non-auth status — treating as transient', res.status, res.error || res.data);
-    // Populate displayName/email from token or localStorage if possible
-    if (!displayName && payload && payload.name) displayName = payload.name;
-    if (!email && payload && payload.email) email = payload.email;
-    showChat();
-  } catch (err) {
-    console.warn('[INIT] unexpected error while calling /api/me — treating as transient', err);
-    // Network failure or other unexpected error — keep user signed in
-    if (!displayName && payload && payload.name) displayName = payload.name;
-    if (!email && payload && payload.email) email = payload.email;
-    showChat();
+function closeProfilePage() {
+  if (profilePage) {
+    profilePage.classList.remove('active');
+    profilePage.classList.add('hidden');
   }
-})();
+  showChat();
+}
 
-// Initialize Google Sign-In button (if configured)
+async function openProfilePage() {
+  try {
+    profileMenu.classList.add('hidden');
+    const me = await api('/api/me');
+    let stats = { totalChats: 0, totalMessages: 0, sharedMediaCount: 0 };
+    try { stats = await api('/api/me/stats'); } catch (e) {}
+
+    const ppAvatarInitials = document.getElementById('ppAvatarInitials');
+    if (me.profilePicture) {
+      if (ppAvatarImg) {
+        ppAvatarImg.src = me.profilePicture;
+        ppAvatarImg.classList.remove('hidden');
+      }
+      if (ppAvatarInitials) ppAvatarInitials.classList.add('hidden');
+    } else {
+      if (ppAvatarImg) ppAvatarImg.classList.add('hidden');
+      if (ppAvatarInitials) {
+        ppAvatarInitials.textContent = getInitials(me.displayName || me.email);
+        ppAvatarInitials.classList.remove('hidden');
+      }
+    }
+
+    if (ppDisplayNameEl) ppDisplayNameEl.textContent = me.displayName || '';
+    if (ppEmailEl) ppEmailEl.textContent = me.email || '';
+    if (ppBioEl) ppBioEl.textContent = me.bio || '';
+    if (ppStatusEl) ppStatusEl.textContent = (me.lastSeen && Date.now() - new Date(me.lastSeen).getTime() < 60_000) ? 'Online' : 'Offline';
+    if (ppJoinedEl) ppJoinedEl.textContent = me.joinedAt ? new Date(me.joinedAt).toLocaleDateString() : '';
+    if (ppLastSeenEl) ppLastSeenEl.textContent = me.lastSeen ? new Date(me.lastSeen).toLocaleString() : '';
+    if (ppTotalChats) ppTotalChats.textContent = stats.totalChats || 0;
+    if (ppTotalMessages) ppTotalMessages.textContent = stats.totalMessages || 0;
+    if (ppSharedMediaCount) ppSharedMediaCount.textContent = stats.sharedMediaCount || 0;
+
+    // prefill settings
+    if (ppEditDisplayName) ppEditDisplayName.value = me.displayName || '';
+    if (ppEditBio) ppEditBio.value = me.bio || '';
+    if (ppThemeSelect) {
+      ppThemeSelect.value = me.theme || localStorage.getItem('theme') || 'system';
+      applyTheme(ppThemeSelect.value);
+    }
+    const ppWallpaperSelect = document.getElementById('ppWallpaperSelect');
+    if (ppWallpaperSelect) {
+      ppWallpaperSelect.value = me.wallpaper || localStorage.getItem('chatWallpaper') || 'default';
+      applyWallpaper(ppWallpaperSelect.value);
+    }
+    const notif = me.notifications || {};
+    if (ppNotifEmail) ppNotifEmail.checked = notif.email === true;
+    if (ppNotifPush) ppNotifPush.checked = notif.push === true;
+    if (ppNotifSound) ppNotifSound.checked = notif.sound === true;
+
+    // show profile page
+    if (profilePage) {
+      profilePage.classList.remove('hidden');
+      profilePage.classList.add('active');
+    }
+    if (chatView) chatView.classList.add('hidden');
+  } catch (err) {
+    console.error('Failed to open profile page', err && err.message ? err.message : err);
+  }
+}
+
+if (viewProfileBtn) {
+  viewProfileBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    openProfilePage();
+  });
+}
+
+const settingsModal = document.getElementById('settingsModal');
+const openSettingsBtn = document.getElementById('openSettingsBtn');
+const closeSettings = document.getElementById('closeSettings');
+const smThemeSelect = document.getElementById('smThemeSelect');
+const smWallpaperSelect = document.getElementById('smWallpaperSelect');
+const smNotifEmail = document.getElementById('smNotifEmail');
+const smNotifPush = document.getElementById('smNotifPush');
+const smNotifSound = document.getElementById('smNotifSound');
+const smChangePassword = document.getElementById('smChangePassword');
+const settingsModalForm = document.getElementById('settingsModalForm');
+const smAccountEmail = document.getElementById('smAccountEmail');
+const smAccountName = document.getElementById('smAccountName');
+const settingsNavItems = document.querySelectorAll('.settings-nav-item');
+const settingsPanels = document.querySelectorAll('.settings-panel');
+
+function selectSettingsTab(tabId) {
+  settingsNavItems.forEach((item) => {
+    item.classList.toggle('active', item.dataset.tab === tabId);
+  });
+  settingsPanels.forEach((panel) => {
+    panel.classList.toggle('hidden', panel.id !== tabId);
+    panel.classList.toggle('active', panel.id === tabId);
+  });
+}
+
+function closeSettingsModal() {
+  if (!settingsModal) return;
+  settingsModal.classList.add('hidden');
+  settingsModal.classList.remove('active');
+}
+
+async function openSettingsModal() {
+  try {
+    if (profileMenu) profileMenu.classList.add('hidden');
+    const me = await api('/api/me');
+    if (smThemeSelect) smThemeSelect.value = me.theme || localStorage.getItem('theme') || 'system';
+    if (smWallpaperSelect) smWallpaperSelect.value = me.wallpaper || localStorage.getItem('chatWallpaper') || 'default';
+    const notifications = me.notifications || {};
+    if (smNotifEmail) smNotifEmail.checked = notifications.email === true;
+    if (smNotifPush) smNotifPush.checked = notifications.push === true;
+    if (smNotifSound) smNotifSound.checked = notifications.sound === true;
+    if (smAccountEmail) smAccountEmail.value = me.email || '';
+    if (smAccountName) smAccountName.value = me.displayName || '';
+    selectSettingsTab('tabAppearance');
+    if (settingsModal) {
+      settingsModal.classList.remove('hidden');
+      settingsModal.classList.add('active');
+    }
+  } catch (err) {
+    console.error('Failed to open settings modal', err);
+  }
+}
+
+if (openSettingsBtn) openSettingsBtn.addEventListener('click', (event) => {
+  event.preventDefault();
+  openSettingsModal();
+});
+if (closeSettings) closeSettings.addEventListener('click', closeSettingsModal);
+settingsNavItems.forEach((item) => {
+  item.addEventListener('click', () => selectSettingsTab(item.dataset.tab));
+});
+
+if (smChangePassword) smChangePassword.addEventListener('click', () => { closeSettingsModal(); openChangePasswordModal(); });
+
+if (smThemeSelect) smThemeSelect.addEventListener('change', (ev) => applyTheme(ev.target.value));
+if (smWallpaperSelect) smWallpaperSelect.addEventListener('change', (ev) => applyWallpaper(ev.target.value));
+
+if (settingsModalForm) {
+  settingsModalForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      const body = {
+        displayName: displayName || localStorage.getItem('chatDisplayName') || '',
+        bio: ppEditBio ? ppEditBio.value.trim() : '',
+        theme: smThemeSelect ? smThemeSelect.value : 'light',
+        wallpaper: smWallpaperSelect ? smWallpaperSelect.value : 'default',
+        notifications: {
+          email: !!(smNotifEmail && smNotifEmail.checked),
+          push: !!(smNotifPush && smNotifPush.checked),
+          sound: !!(smNotifSound && smNotifSound.checked),
+        }
+      };
+      const res = await api('/api/me/update', { method: 'POST', body: JSON.stringify(body) });
+      if (res && res.token) storeSession({ token: res.token, email: res.email, displayName: res.displayName, profilePicture: res.profilePicture });
+      applyTheme(res.theme || smThemeSelect.value);
+      applyWallpaper(res.wallpaper || smWallpaperSelect.value);
+      alert('Settings saved.');
+      closeSettingsModal();
+    } catch (err) {
+      alert('Failed to save settings: ' + (err && err.message));
+    }
+  });
+}
+
+// Dropdown Logout button
+// This control is already queried near the top of this module. Reuse that
+// reference so the script remains valid and all authentication code loads.
+const menuLogoutControl = menuLogoutBtn;
+if (menuLogoutControl) {
+  menuLogoutControl.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      if (profileMenu) profileMenu.classList.add('hidden');
+      await api('/api/logout', { method: 'POST' });
+    } finally {
+      showAuth();
+    }
+  });
+}
+
+// choose file & avatar save bar
+const ppAvatarActions = document.getElementById('ppAvatarActions');
+if (ppChooseBtn && ppFileInput) {
+  ppChooseBtn.addEventListener('click', () => ppFileInput.click());
+  ppFileInput.addEventListener('change', (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      _ppSelectedImage = { dataUrl: reader.result, type: f.type };
+      if (ppAvatarImg) {
+        ppAvatarImg.src = reader.result;
+        ppAvatarImg.classList.remove('hidden');
+      }
+      const ppAvatarInitials = document.getElementById('ppAvatarInitials');
+      if (ppAvatarInitials) ppAvatarInitials.classList.add('hidden');
+      if (ppAvatarActions) ppAvatarActions.classList.remove('hidden');
+    };
+    reader.readAsDataURL(f);
+  });
+}
+
+// save photo
+if (ppSavePhoto) {
+  ppSavePhoto.addEventListener('click', async () => {
+    if (!_ppSelectedImage) return alert('Select an image first');
+    try {
+      ppSavePhoto.disabled = true;
+      const parts = _ppSelectedImage.dataUrl.split(',');
+      const base64 = parts[1];
+      const type = _ppSelectedImage.type || (_ppSelectedImage.dataUrl.match(/^data:(image\/[^;]+);/) || [])[1] || 'image/png';
+      const res = await api('/api/me/photo', { method: 'POST', body: JSON.stringify({ imageBase64: base64, imageType: type }) });
+      if (res && res.profilePicture) {
+        if (typeof storeSession === 'function') storeSession(res);
+        localStorage.setItem('chatProfilePicture', res.profilePicture);
+        if (ppAvatarImg) {
+          ppAvatarImg.src = res.profilePicture;
+          ppAvatarImg.classList.remove('hidden');
+        }
+        const ppAvatarInitials = document.getElementById('ppAvatarInitials');
+        if (ppAvatarInitials) ppAvatarInitials.classList.add('hidden');
+
+        if (headerAvatar) {
+          headerAvatar.innerHTML = '';
+          const img = document.createElement('img'); img.src = res.profilePicture; img.className = 'avatar-img avatar-mini'; img.alt = res.displayName || '';
+          headerAvatar.appendChild(img);
+        }
+        _ppSelectedImage = null;
+        if (ppAvatarActions) ppAvatarActions.classList.add('hidden');
+        alert('Profile photo saved.');
+        try { await loadRecentChats(); } catch (e) {}
+      }
+    } catch (err) {
+      alert('Failed to upload photo: ' + (err && err.message));
+    } finally {
+      ppSavePhoto.disabled = false;
+    }
+  });
+}
+
+if (ppCancelPhoto) {
+  ppCancelPhoto.addEventListener('click', () => {
+    _ppSelectedImage = null;
+    if (ppAvatarActions) ppAvatarActions.classList.add('hidden');
+    openProfilePage();
+  });
+}
+
+if (ppSettingsForm) {
+  ppSettingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const data = await api('/api/me/update', {
+        method: 'POST',
+        body: JSON.stringify({
+          displayName: ppEditDisplayName.value.trim(),
+          bio: ppEditBio.value.trim(),
+          theme: localStorage.getItem('theme') || 'light',
+          wallpaper: localStorage.getItem('chatWallpaper') || 'default',
+        }),
+      });
+      storeSession(data);
+      displayName = data.displayName || displayName;
+      if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
+      alert('Profile saved.');
+      closeProfilePage();
+    } catch (err) {
+      alert('Failed to save profile: ' + (err && err.message));
+    }
+  });
+}
+
+if (ppClose) ppClose.addEventListener('click', closeProfilePage);
+if (logoMark) logoMark.addEventListener('click', () => sidebarEl && sidebarEl.classList.toggle('open'));
+
 async function initGoogleSignIn() {
   try {
-    const cfg = await fetch(`${API_BASE_URL}/api/config`)
-      .then((r) => r.json());
-    const clientId = cfg.googleClientId || "";
+    const configResponse = await fetch(`${API_BASE_URL}/api/config`);
+    if (!configResponse.ok) throw new Error('Unable to load sign-in configuration.');
+    const config = await configResponse.json();
+    const clientId = config.googleClientId || '';
     const container = document.getElementById('googleSignIn');
-    // Always render a visible button so users see the option.
-    if (container && !clientId) {
-      container.innerHTML = '';
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'google-btn';
-      btn.disabled = true;
-      btn.textContent = 'Continue with Google (configure GOOGLE_CLIENT_ID)';
-      btn.addEventListener('click', () => {
-        loginError.textContent = 'Google Sign-In is not configured. Set GOOGLE_CLIENT_ID in .env.';
+    if (!container) return;
+
+    if (!clientId) {
+      container.innerHTML = '<button type="button" class="google-btn">Continue with Google</button>';
+      container.querySelector('button').addEventListener('click', () => {
+        loginError.textContent = 'Google Sign-In is not configured.';
       });
-      container.appendChild(btn);
       return;
     }
 
-    const handleCredentialResponse = async (resp) => {
+    const handleCredential = async ({ credential }) => {
       try {
         const data = await api('/api/auth/google', {
           method: 'POST',
-          body: JSON.stringify({ idToken: resp.credential }),
+          body: JSON.stringify({ idToken: credential }),
         });
         storeSession(data);
-        // Always prompt for profile details after first sign-in so users can confirm/edit
-        displayName = data.displayName || '';
-        localStorage.setItem('chatDisplayName', displayName);
-        if (data.profilePicture) localStorage.setItem('chatProfilePicture', data.profilePicture);
-        showProfileDetails(displayName || '');
+        loginError.textContent = '';
+        if (data.displayName && String(data.displayName).trim()) showChat();
+        else showProfileDetails('');
       } catch (err) {
         loginError.textContent = err.message || 'Google sign-in failed.';
       }
     };
 
-    // Wait for google.accounts to be available
-    const waitForGoogle = () => new Promise((resolve) => {
-      if (window.google && google.accounts && google.accounts.id) return resolve();
-      const to = setInterval(() => {
-        if (window.google && google.accounts && google.accounts.id) {
-          clearInterval(to);
-          resolve();
-        }
-      }, 200);
-      setTimeout(() => resolve(), 3000);
-    });
-
-    await waitForGoogle();
-    if (!window.google || !google.accounts || !google.accounts.id) return;
-
-    google.accounts.id.initialize({
-      client_id: clientId,
-      callback: handleCredentialResponse,
-      ux_mode: 'popup',
-    });
-
-    // Render Google's official button inside our container
-    if (container) {
-      container.innerHTML = '';
-      google.accounts.id.renderButton(container, { theme: 'outline', size: 'large', text: 'continue_with' });
+    const waitUntil = Date.now() + 5000;
+    while ((!window.google || !window.google.accounts || !window.google.accounts.id) && Date.now() < waitUntil) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    if (!window.google || !window.google.accounts || !window.google.accounts.id) {
+      throw new Error('Google Sign-In could not load.');
+    }
+    window.google.accounts.id.initialize({ client_id: clientId, callback: handleCredential, ux_mode: 'popup' });
+    container.innerHTML = '';
+    window.google.accounts.id.renderButton(container, { theme: 'outline', size: 'large', text: 'continue_with' });
   } catch (err) {
     console.error('Failed to initialize Google Sign-In', err);
+    if (loginError) loginError.textContent = 'Google Sign-In is temporarily unavailable.';
   }
 }
 
 initGoogleSignIn();
 
-// Trigger animated 3D entrance for the brand title and tagline
 setTimeout(() => {
   try {
     const title = document.querySelector('.brand-title');
@@ -1191,3 +1997,49 @@ document.querySelector("#pdSkip").addEventListener("click", () => {
   hideProfileDetails();
   showChat();
 });
+
+// Composer Input Emoji Picker setup
+(function setupComposerEmojiPicker() {
+  const inputEmojiBtn = document.getElementById('inputEmojiBtn');
+  const inputEmojiPicker = document.getElementById('inputEmojiPicker');
+  const COMPOSER_EMOJIS = [
+    '😊', '😂', '❤️', '👍', '🔥', '🎉', '🙏', '😮', '😢', '😍',
+    '🥳', '✨', '👏', '🙌', '😎', '💡', '💯', '🤔', '👋', '👀',
+    '⭐', '🚀', '🎁', '💬', '🤩', '💩', '🥳', '😴', '💔', '⚡'
+  ];
+
+  if (!inputEmojiBtn || !inputEmojiPicker) return;
+
+  inputEmojiPicker.innerHTML = '';
+  COMPOSER_EMOJIS.forEach(emoji => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'input-emoji-item';
+    btn.textContent = emoji;
+    btn.title = `Insert ${emoji}`;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (messageInput) {
+        const start = messageInput.selectionStart || messageInput.value.length;
+        const end = messageInput.selectionEnd || messageInput.value.length;
+        const text = messageInput.value;
+        messageInput.value = text.slice(0, start) + emoji + text.slice(end);
+        messageInput.selectionStart = messageInput.selectionEnd = start + emoji.length;
+        messageInput.focus();
+      }
+      inputEmojiPicker.classList.add('hidden');
+    });
+    inputEmojiPicker.appendChild(btn);
+  });
+
+  inputEmojiBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    inputEmojiPicker.classList.toggle('hidden');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (inputEmojiPicker && !inputEmojiPicker.contains(e.target) && e.target !== inputEmojiBtn) {
+      inputEmojiPicker.classList.add('hidden');
+    }
+  });
+})();
