@@ -81,9 +81,8 @@ BuddyChat/
 │
 ├── backend/
 │   ├── server.js
-│   ├── routes/
-│   ├── controllers/
-│   └── database/
+│   ├── migrate_users.js
+│   └── test_google_config.js
 │
 ├── frontend/
 │   ├── index.html
